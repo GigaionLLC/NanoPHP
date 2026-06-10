@@ -42,6 +42,11 @@ function spawnEchoServer(int $port)
     $running_server = $server;
 
     for ($i = 0; $i < 50; $i++) {
+        if (!proc_get_status($server)['running']) {
+            fwrite(STDERR, "Echo server exited early: " . stream_get_contents($pipes[2]) . "\n");
+            exit(1);
+        }
+
         $socket = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.2);
         if ($socket) {
             fclose($socket);
@@ -52,6 +57,20 @@ function spawnEchoServer(int $port)
 
     fwrite(STDERR, "Echo server did not come up\n");
     exit(1);
+}
+
+function stopEchoServer($server): void
+{
+    proc_terminate($server);
+
+    // Wait for the process to actually release its socket; an immediate
+    // re-spawn on the same port would otherwise race the dying listener
+    for ($i = 0; $i < 50; $i++) {
+        if (!proc_get_status($server)['running']) {
+            return;
+        }
+        usleep(100000);
+    }
 }
 
 register_shutdown_function(function () {
@@ -85,13 +104,16 @@ check('connection alive after server ping', $ws->isConnected());
 
 $ws->close();
 check('closed state after close()', $ws->isConnected(), false);
-proc_terminate($server);
+stopEchoServer($server);
 
 
 // *
 // *  NanoWS wrapper (Nano node subscription protocol shape)
 // *
 
+// Fresh server on a fresh port: even after waiting for the old process to
+// exit, lingering TIME_WAIT sockets can make a same-port rebind flaky
+$port++;
 $server = spawnEchoServer($port);
 
 $nano_ws = new NanoWS('ws', '127.0.0.1', $port);
@@ -120,7 +142,7 @@ $echo = $nano_ws->listen();
 check('keepalive ping', [$echo['action'], $echo['id']], ['ping', $id]);
 
 $nano_ws->close();
-proc_terminate($server);
+stopEchoServer($server);
 
 
 // *
