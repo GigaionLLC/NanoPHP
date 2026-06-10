@@ -1,14 +1,10 @@
 <?php
 
-namespace MikeRow\NanoPHP;
+namespace GigaionLLC\NanoPHP;
 
 use \Exception;
-use \SplFixedArray;
-use BitWasp\BitcoinLib\BIP39;
-use MikeRow\Salt\Blake2b\Blake2b;
-use MikeRow\Salt\Ed25519\Ed25519;
-use MikeRow\Salt\NanoSalt;
-use MikeRow\Salt\FieldElement;
+use GigaionLLC\NanoPHP\Crypto\Blake2b;
+use GigaionLLC\NanoPHP\Crypto\Ed25519Blake2b;
 
 class NanoToolException extends Exception{}
 
@@ -17,7 +13,7 @@ class NanoTool
     // *
     // *  Constants
     // *
-    
+
     const RAWS = [
         'unano' =>                '1000000000000000000',
         'mnano' =>             '1000000000000000000000',
@@ -27,41 +23,133 @@ class NanoTool
          'NANO' =>    '1000000000000000000000000000000',
         'Gnano' => '1000000000000000000000000000000000'
     ];
-    
+
     const PREAMBLE_HEX = '0000000000000000000000000000000000000000000000000000000000000006';
     const EMPTY32_HEX  = '0000000000000000000000000000000000000000000000000000000000000000';
     const HARDENED     =  0x80000000;
-       
-    
+
+    const ACCOUNT_ALPHABET = '13456789abcdefghijkmnopqrstuwxyz';
+
+    private static $bip39Words;
+
+
+    // *
+    // *  Internal helpers
+    // *
+
+    private static function isHex(string $value, int $length = 0): bool
+    {
+        if ($length > 0 && strlen($value) != $length) {
+            return false;
+        }
+
+        return strlen($value) % 2 == 0 && strlen($value) > 0 && ctype_xdigit($value);
+    }
+
+    private static function accountChecksum(string $public_key_bin): string
+    {
+        // 5-byte BLAKE2b of the public key, reversed
+        return strrev(Blake2b::hash($public_key_bin, 5));
+    }
+
+    private static function bytes2bits(string $bytes): string
+    {
+        $bits = '';
+        for ($i = 0, $len = strlen($bytes); $i < $len; $i++) {
+            $bits .= str_pad(decbin(ord($bytes[$i])), 8, '0', STR_PAD_LEFT);
+        }
+
+        return $bits;
+    }
+
+    private static function bits2bytes(string $bits): string
+    {
+        $bytes = '';
+        for ($i = 0, $len = strlen($bits); $i < $len; $i += 8) {
+            $bytes .= chr(bindec(substr($bits, $i, 8)));
+        }
+
+        return $bytes;
+    }
+
+    private static function base32Encode(string $bytes): string
+    {
+        // Nano base32: data is left-padded with zero bits to a multiple of 5
+        $bits = self::bytes2bits($bytes);
+        $bits = str_pad($bits, (int) (ceil(strlen($bits) / 5) * 5), '0', STR_PAD_LEFT);
+
+        $encoded = '';
+        for ($i = 0, $len = strlen($bits); $i < $len; $i += 5) {
+            $encoded .= self::ACCOUNT_ALPHABET[bindec(substr($bits, $i, 5))];
+        }
+
+        return $encoded;
+    }
+
+    private static function base32Decode(string $encoded, int $bytes): string
+    {
+        $bits = '';
+        for ($i = 0, $len = strlen($encoded); $i < $len; $i++) {
+            $pos = strpos(self::ACCOUNT_ALPHABET, $encoded[$i]);
+            if ($pos === false) {
+                throw new NanoToolException("Invalid character in encoded string: {$encoded[$i]}");
+            }
+            $bits .= str_pad(decbin($pos), 5, '0', STR_PAD_LEFT);
+        }
+
+        // Drop the leading padding bits
+        return self::bits2bytes(substr($bits, strlen($bits) - $bytes * 8));
+    }
+
+    private static function bip39WordList(): array
+    {
+        if (self::$bip39Words === null) {
+            $file = __DIR__ . '/Util/bip39-english.txt';
+            if (!is_file($file)) {
+                throw new NanoToolException("BIP39 word list not found: $file");
+            }
+
+            $words = preg_split('/\s+/', trim(file_get_contents($file)));
+            if (count($words) != 2048) {
+                throw new NanoToolException("Invalid BIP39 word list: $file");
+            }
+
+            self::$bip39Words = $words;
+        }
+
+        return self::$bip39Words;
+    }
+
+
     // *
     // *  Denomination to raw
     // *
-    
+
     public static function den2raw($amount, string $denomination): string
     {
         if (!array_key_exists($denomination, self::RAWS)) {
             throw new NanoToolException("Invalid denomination: $denomination");
         }
-        
+
         $raw_to_denomination = self::RAWS[$denomination];
-        
+
         if ($amount == 0) {
             return '0';
         }
-        
+
         if (strpos($amount, '.')) {
             $dot_pos = strpos($amount, '.');
             $number_len = strlen($amount) - 1;
             $raw_to_denomination = substr($raw_to_denomination, 0, -($number_len - $dot_pos));
         }
-        
+
         $amount = str_replace('.', '', $amount) . str_replace('1', '', $raw_to_denomination);
-        
+
         // Remove useless zeros from left
         while (substr($amount, 0, 1) == '0') {
             $amount = substr($amount, 1);
         }
-        
+
         return $amount;
     }
 
@@ -69,53 +157,53 @@ class NanoTool
     // *
     // *  Raw to denomination
     // *
-    
+
     public static function raw2den(string $amount, string $denomination): string
     {
         if (!array_key_exists($denomination, self::RAWS)) {
             throw new NanoToolException("Invalid denomination: $denomination");
         }
-        
+
         $raw_to_denomination = self::RAWS[$denomination];
-        
+
         if ($amount == '0') {
-            return 0;
+            return '0';
         }
-        
+
         $prefix_lenght = 39 - strlen($amount);
-        
+
         $i = 0;
-        
+
         while ($i < $prefix_lenght) {
             $amount = '0' . $amount;
             $i++;
         }
-        
+
         $amount = substr_replace($amount, '.', -(strlen($raw_to_denomination)-1), 0);
-    
+
         // Remove useless zeroes from left
         while (substr($amount, 0, 1) == '0' && substr($amount, 1, 1) != '.') {
             $amount = substr($amount, 1);
         }
-    
+
         // Remove useless decimals
         while (substr($amount, -1) == '0') {
             $amount = substr($amount, 0, -1);
         }
-        
+
         // Remove dot if all decimals are zeros
         if (substr($amount, -1) == '.') {
             $amount = substr($amount, 0, -1);
         }
-    
+
         return $amount;
     }
-    
-    
+
+
     // *
     // *  Denomination to denomination
     // *
-    
+
     public static function den2den($amount, string $denomination_from, string $denomination_to): string
     {
         if (!array_key_exists($denomination_from, self::RAWS)) {
@@ -124,121 +212,80 @@ class NanoTool
         if (!array_key_exists($denomination_to, self::RAWS)) {
             throw new NanoToolException("Invalid target denomination: $denomination_to");
         }
-        
+
         $raw = self::den2raw($amount, $denomination_from);
-        
+
         return self::raw2den($raw, $denomination_to);
     }
-    
-    
+
+
     // *
     // *  Account to public key
     // *
-    
+
     public static function account2public(string $account, bool $get_public_key = true)
     {
-        if (((strpos($account, 'xrb_1') === 0  ||  
+        if (((strpos($account, 'xrb_1') === 0  ||
               strpos($account, 'xrb_3') === 0) &&
              strlen($account) == 64) ||
-            ((strpos($account, 'nano_1') === 0  ||  
+            ((strpos($account, 'nano_1') === 0  ||
               strpos($account, 'nano_3') === 0) &&
              strlen($account) == 65)
         ) {
-            $crop = explode('_', $account);
-            $crop = $crop[1];
-            
+            $crop = explode('_', $account)[1];
+
             if (preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/', $crop)) {
-                $aux = \MikeRow\NanoPHP\Util\Uint::fromString(substr($crop, 0, 52))->toUint4()->toArray();
-                array_shift($aux);
-                $key_uint4  = $aux;
-                $hash_uint8 = \MikeRow\NanoPHP\Util\Uint::fromString(substr($crop, 52, 60))->toUint8()->toArray();
-                $key_uint8  = \MikeRow\NanoPHP\Util\Uint::fromUint4Array($key_uint4)->toUint8();
-                
-                if (!extension_loaded('blake2')) {
-                    $key_hash = new SplFixedArray(64);
-                    $b2b = new Blake2b();
-                    $ctx = $b2b->init(null, 5);
-                    $b2b->update($ctx, $key_uint8, 32);
-                    $b2b->finish($ctx, $key_hash);
-                    $key_hash = array_reverse(array_slice($key_hash->toArray(), 0, 5));
-                } else {
-                    $key_uint8 = \MikeRow\NanoPHP\Util\Bin::arr2bin((array) $key_uint8);
-                    $key_hash = blake2($key_uint8, 5, null, true);
-                    $key_hash = \MikeRow\NanoPHP\Util\Bin::bin2arr(strrev($key_hash));
-                }
-                
-                if ($hash_uint8 == $key_hash) {
+                $public_key = self::base32Decode(substr($crop, 0, 52), 32);
+                $checksum   = self::base32Decode(substr($crop, 52, 8), 5);
+
+                if (hash_equals(self::accountChecksum($public_key), $checksum)) {
                     if ($get_public_key) {
-                        return \MikeRow\NanoPHP\Util\Uint::fromUint4Array($key_uint4)->toHexString();
-                    } else {
-                        return true;
+                        return strtoupper(bin2hex($public_key));
                     }
+
+                    return true;
                 }
             }
         }
-        
+
         return false;
     }
-    
-    
+
+
     // *
     // *  Public key to account
     // *
-    
+
     public static function public2account(string $public_key): string
     {
-        if (strlen($public_key) != 64 || !hex2bin($public_key)) {
+        if (!self::isHex($public_key, 64)) {
             throw new NanoToolException("Invalid public key: $public_key");
         }
 
-        if (!extension_loaded('blake2')) {
-            $key = \MikeRow\NanoPHP\Util\Uint::fromHex($public_key);
-            $checksum;
-            $hash = new SplFixedArray(64);
-            
-            $b2b = new Blake2b();
-            $ctx = $b2b->init(null, 5);
-            $b2b->update($ctx, $key->toUint8(), 32);
-            $b2b->finish($ctx, $hash);
-            $hash = \MikeRow\NanoPHP\Util\Uint::fromUint8Array(array_slice($hash->toArray(), 0, 5))->reverse();
-            $checksum = $hash->toString();
-        } else {
-            $key = \MikeRow\NanoPHP\Util\Uint::fromHex($public_key)->toUint8();
-            $key = \MikeRow\NanoPHP\Util\Bin::arr2bin((array) $key);
-            
-            $hash = blake2($key, 5, null, true);
-            $hash = \MikeRow\NanoPHP\Util\Bin::bin2arr(strrev($hash));
-            $checksum = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($hash)->toString();
-        }
-        
-        $c_account = \MikeRow\NanoPHP\Util\Uint::fromHex('0' . $public_key)->toString();
-        
-        return 'nano_' . $c_account . $checksum;
+        $public_key = hex2bin($public_key);
+
+        return 'nano_' . self::base32Encode($public_key) . self::base32Encode(self::accountChecksum($public_key));
     }
-    
-    
+
+
     // *
     // *  Private key to public key
     // *
-    
+
     public static function private2public(string $private_key): string
     {
-        if (strlen($private_key) != 64 || !hex2bin($private_key)) {
+        if (!self::isHex($private_key, 64)) {
             throw new NanoToolException("Invalid private key: $private_key");
         }
-        
-        $salt = NanoSalt::instance();
-        $private_key = \MikeRow\NanoPHP\Util\Uint::fromHex($private_key)->toUint8();
-        $public_key = $salt::crypto_sign_public_from_secret_key($private_key);
-        
-        return \MikeRow\NanoPHP\Util\Uint::fromUint8Array($public_key)->toHexString();
+
+        return strtoupper(bin2hex(Ed25519Blake2b::publicKey(hex2bin($private_key))));
     }
-    
-    
+
+
     // *
     // *  String to burn account
     // *
-    
+
     public static function string2burn(string $string, string $leading_char = '1', string $filling_char = '1'): string
     {
         if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/', $string) || strlen($string) < 1 || strlen($string) > 51) {
@@ -247,505 +294,430 @@ class NanoTool
         if ($leading_char != '1' && $leading_char != '3') {
             throw new NanoToolException("Invalid leading character: $leading_char");
         }
-        if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/', $filling_char) || strlen($filling_char != 1)) {
+        if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]$/', $filling_char)) {
             throw new NanoToolException("Invalid filling character: $filling_char");
         }
-        
+
         $string = $leading_char . $string . str_repeat($filling_char, (51 - strlen($string)));
-        
-        $aux = \MikeRow\NanoPHP\Util\Uint::fromString($string)->toUint4()->toArray();
-        array_shift($aux);
-        $key_uint4  = $aux;
-        $key_uint8  = \MikeRow\NanoPHP\Util\Uint::fromUint4Array($key_uint4)->toUint8();
-        
-        if (!extension_loaded('blake2')) {
-            $checksum;
-            $hash = new SplFixedArray(64);
-            
-            $b2b = new Blake2b();
-            $ctx = $b2b->init(null, 5);
-            $b2b->update($ctx, $key_uint8, 32);
-            $b2b->finish($ctx, $hash);
-            $hash = \MikeRow\NanoPHP\Util\Uint::fromUint8Array(array_slice($hash->toArray(), 0, 5))->reverse();
-            $checksum = $hash->toString();
-        } else {
-            $key = \MikeRow\NanoPHP\Util\Bin::arr2bin((array) $key_uint8);
-            
-            $hash = blake2($key, 5, null, true);
-            $hash = \MikeRow\NanoPHP\Util\Bin::bin2arr(strrev($hash));
-            $checksum = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($hash)->toString();
-        }
-        
-        return 'nano_' . $string . $checksum;
+
+        $public_key = self::base32Decode($string, 32);
+
+        return 'nano_' . $string . self::base32Encode(self::accountChecksum($public_key));
     }
-    
-    
+
+
     // *
     // *  Get random keypair
     // *
-    
+
     public static function keys(bool $get_account = false): array
     {
-        $salt = NanoSalt::instance();
-        $keys = $salt->crypto_sign_keypair();
-        
-        $keys[0] = \MikeRow\NanoPHP\Util\Uint::fromUint8Array(array_slice($keys[0]->toArray(), 0, 32))->toHexString();
-        $keys[1] = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($keys[1])->toHexString();
-        
+        $private_key = random_bytes(32);
+        $public_key  = Ed25519Blake2b::publicKey($private_key);
+
+        $keys = [
+            strtoupper(bin2hex($private_key)),
+            strtoupper(bin2hex($public_key))
+        ];
+
         if ($get_account) {
             $keys[] = self::public2account($keys[1]);
         }
-        
+
         return $keys;
     }
-    
-    
+
+
     // *
     // *  Seed to keypair (Blake2b)
     // *
-    
+
     public static function seed2keys(string $seed, int $index = 0, bool $get_account = false): array
     {
-        if (strlen($seed) != 64 || !hex2bin($seed)) {
+        if (!self::isHex($seed, 64)) {
             throw new NanoToolException("Invalid seed: $seed");
         }
         if ($index < 0 || $index > 4294967295) {
             throw new NanoToolException("Invalid index: $index");
         }
-        
-        $seed  = \MikeRow\NanoPHP\Util\Uint::fromHex($seed)->toUint8();
-        $index = \MikeRow\NanoPHP\Util\Uint::fromDec($index)->toUint8()->toArray();
-        
-        if (count($index) < 4) {
-            $missing_bytes = [];
-            for ($i = 0; $i < (4 - count($index)); $i++) {
-                $missing_bytes[] = 0;
-            }
-            $index = array_merge($missing_bytes, $index);
-        }
-        
-        $index = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($index)->toUint8();
-        $private_key = new SplFixedArray(64);
-        
-        $b2b = new Blake2b();
-        $ctx = $b2b->init(null, 32);
-        $b2b->update($ctx, $seed, 32);
-        $b2b->update($ctx, $index, 4);
-        $b2b->finish($ctx, $private_key);
-        
-        $private_key = \MikeRow\NanoPHP\Util\Uint::fromUint8Array(array_slice($private_key->toArray(), 0, 32))->toHexString();
+
+        $private_key = strtoupper(bin2hex(
+            Blake2b::hash(hex2bin($seed) . pack('N', $index), 32)
+        ));
         $public_key = self::private2public($private_key);
-        
-        $keys = [$private_key,$public_key];
-        
+
+        $keys = [$private_key, $public_key];
+
         if ($get_account) {
             $keys[] = self::public2account($public_key);
         }
-        
+
         return $keys;
     }
-    
-    
+
+
     // *
-    // *  Mnemonic seed to hexadecimal string (BIP39)
+    // *  Mnemonic words to hexadecimal string (BIP39)
     // *
-    
+
     public static function mnem2hex(array $words): string
     {
         $mnem_count = count($words);
-		
+
         if ($mnem_count != 12 &&
             $mnem_count != 15 &&
             $mnem_count != 18 &&
             $mnem_count != 21 &&
-		    $mnem_count != 24
-	    ) {
+            $mnem_count != 24
+        ) {
             throw new NanoToolException("Invalid words array count: not 12,15,18,21,24");
         }
-        
-        $bip39 = new BIP39\BIP39EnglishWordList();    
-        $bip39_words = $bip39->getWords();
-        $bits = [];
-        $hex  = [];
-        
-        foreach ($words as $index => $value) {
-            $word = array_search($value, $bip39_words);
-            if ($word === false) {
-                throw new NanoToolException("Invalid menmonic word: $value");
+
+        $bip39_words = self::bip39WordList();
+        $bits = '';
+
+        foreach ($words as $word) {
+            $index = array_search($word, $bip39_words);
+            if ($index === false) {
+                throw new NanoToolException("Invalid mnemonic word: $word");
             }
-            
-            $words[$index] = decbin($word);
-            $words[$index] = str_split(str_repeat('0', (11 - strlen($words[$index]))) . $words[$index]);
-            
-            foreach ($words[$index] as $bit) {
-                $bits[] = $bit;
-            }
+
+            $bits .= str_pad(decbin($index), 11, '0', STR_PAD_LEFT);
         }
-        
-        for ($i = 0; $i < ceil($mnem_count*2.66666); $i++) {
-            $hex[] = bindec(implode('', array_slice($bits, $i * 8, 8)));
+
+        $entropy_bits  = intdiv($mnem_count * 11 * 32, 33);
+        $checksum_bits = $mnem_count * 11 - $entropy_bits;
+
+        $entropy = self::bits2bytes(substr($bits, 0, $entropy_bits));
+
+        // Verify checksum
+        $check = self::bytes2bits(hash('sha256', $entropy, true));
+        if (substr($bits, $entropy_bits) !== substr($check, 0, $checksum_bits)) {
+            throw new NanoToolException("Invalid mnemonic checksum");
         }
-        
-        $hex = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($hex)->toHexString();
-        $hex = substr($hex, 0, ceil($mnem_count*2.66666));
-        
-        return $hex;
+
+        return strtoupper(bin2hex($entropy));
     }
-    
-    
+
+
     // *
     // *  Hexadecimal string to mnemonic words (BIP39)
     // *
-    
+
     public static function hex2mnem(string $hex): array
     {
-        $hex_lenght = strlen($hex);
-		
-        if (($hex_lenght != 32 &&
-             $hex_lenght != 40 &&
-             $hex_lenght != 48 &&
-             $hex_lenght != 56 &&
-             $hex_lenght != 64) ||
-            !hex2bin($hex)
+        $hex_length = strlen($hex);
+
+        if (($hex_length != 32 &&
+             $hex_length != 40 &&
+             $hex_length != 48 &&
+             $hex_length != 56 &&
+             $hex_length != 64) ||
+            !self::isHex($hex)
         ) {
             throw new NanoToolException("Invalid hexadecimal string: $hex");
         }
-        
-        $bip39 = new BIP39\BIP39EnglishWordList();
-        $bip39_words = $bip39->getWords();
-        $bits     = [];
+
+        $bip39_words = self::bip39WordList();
+
+        $entropy = hex2bin($hex);
+        $entropy_bits  = $hex_length * 4;
+        $checksum_bits = intdiv($entropy_bits, 32);
+
+        $bits = self::bytes2bits($entropy)
+              . substr(self::bytes2bits(hash('sha256', $entropy, true)), 0, $checksum_bits);
+
         $mnemonic = [];
-        
-        $hex = \MikeRow\NanoPHP\Util\Uint::fromHex($hex)->toUint8();
-        $check = hash('sha256', \MikeRow\NanoPHP\Util\Bin::arr2bin((array) $hex), true);
-        $hex  = array_merge((array) $hex, \MikeRow\NanoPHP\Util\Bin::bin2arr(substr($check, 0, 1)));
-        
-        foreach ($hex as $byte) {
-            $bits_raw = decbin($byte);
-            $bits     = array_merge($bits, str_split(str_repeat('0', (8 - strlen($bits_raw))) . $bits_raw));
+        for ($i = 0, $len = strlen($bits); $i < $len; $i += 11) {
+            $mnemonic[] = $bip39_words[bindec(substr($bits, $i, 11))];
         }
-        
-        for ($i = 0; $i < floor($hex_lenght/2.66666); $i++) {
-            $mnemonic[] = $bip39_words[bindec(implode('', array_slice($bits, $i * 11, 11)))];
-        }
-        
+
         return $mnemonic;
     }
-    
-    
+
+
     // *
     // *  Mnemonic words to master seed (BIP39/44)
     // *
-    
+
     public static function mnem2mseed(array $words, string $passphrase = ''): string
     {
         if (count($words) < 1) {
             throw new NanoToolException("Invalid words array count: less than 1");
         }
-        
-        $bip39 = new BIP39\BIP39EnglishWordList();
-        $bip39_words = $bip39->getWords();
-        
-        foreach ($words as $index => $value) {
-            $word = array_search($value, $bip39_words);
-            if ($word === false) {
-                throw new NanoToolException("Invalid menmonic word: $value");
+
+        $bip39_words = self::bip39WordList();
+
+        foreach ($words as $word) {
+            if (array_search($word, $bip39_words) === false) {
+                throw new NanoToolException("Invalid mnemonic word: $word");
             }
         }
-        
+
         return strtoupper(
             hash_pbkdf2('sha512', implode(' ', $words), 'mnemonic' . $passphrase, 2048, 128)
         );
     }
-    
-    
+
+
     // *
     // *  Master seed to keypair (BIP39/44)
     // *
-    
+
     public static function mseed2keys(string $mseed, int $index = 0, bool $get_account = false): array
     {
-        if (strlen($mseed) != 128 || !hex2bin($mseed)) {
+        if (!self::isHex($mseed, 128)) {
             throw new NanoToolException("Invalid master seed: $mseed");
         }
         if ($index < 0 || $index > 4294967295) {
             throw new NanoToolException("Invalid index: $index");
         }
-        
-        $path = ["44","165","$index"];
-        
+
+        // BIP44 path m/44'/165'/index' with all segments hardened (SLIP-0010 ed25519)
+        $path = [44, 165, $index];
+
         $I     = hash_hmac('sha512', hex2bin($mseed), 'ed25519 seed', true);
-        $HDKey = [substr($I, 0, 32),substr($I, 32, 32)];
-        
+        $HDKey = [substr($I, 0, 32), substr($I, 32, 32)];
+
         foreach ($path as $entry) {
-            $entry = intval($entry);
             if ($entry >= self::HARDENED) {
-                $entry = $entry - self::HARDENED;
+                $entry -= self::HARDENED;
             }
-            
-            $data  = chr(0x00) . $HDKey[0] . hex2bin(dechex(self::HARDENED + (int) $entry));
+
+            $data  = chr(0x00) . $HDKey[0] . pack('N', self::HARDENED + $entry);
             $I     = hash_hmac('sha512', $data, $HDKey[1], true);
-            $HDKey = [substr($I, 0, 32),substr($I, 32, 32)];
+            $HDKey = [substr($I, 0, 32), substr($I, 32, 32)];
         }
-        
+
         $private_key = strtoupper(bin2hex($HDKey[0]));
-        $keys = [$private_key,self::private2public($private_key)];
-        
+        $keys = [$private_key, self::private2public($private_key)];
+
         if ($get_account) {
             $keys[] = self::public2account($keys[1]);
         }
-        
+
         return $keys;
     }
-    
-    
+
+
     // *
     // *  Hash array of hexadecimals
     // *
-    
+
     public static function hashHexs(array $hexs, int $size = 32): string
     {
         if (count($hexs) < 1) {
             throw new NanoToolException("Invalid hexadecimals array count: less than 1");
         }
-        if ($size < 1) {
+        if ($size < 1 || $size > 64) {
             throw new NanoToolException("Invalid size: $size");
         }
-        
-        $b2b = new Blake2b();
-        
-        $ctx  = $b2b->init(null, $size);
-        $hash = new SplFixedArray(64);
-        
-        foreach ($hexs as $index => $value) {
-            if (!hex2bin($value)) {
+
+        $b2b = new Blake2b($size);
+
+        foreach ($hexs as $value) {
+            if (!self::isHex($value)) {
                 throw new NanoToolException("Invalid hexadecimal string: $value");
             }
-            
-            $value = \MikeRow\NanoPHP\Util\Uint::fromHex($value)->toUint8();
-            $b2b->update($ctx, $value, count($value));
+
+            $b2b->update(hex2bin($value));
         }
 
-        $b2b->finish($ctx, $hash);
-        $hash = $hash->toArray();
-        $hash = array_slice($hash, 0, $size);
-        $hash = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($hash)->toHexString();
-        
-        return $hash;
+        return strtoupper(bin2hex($b2b->digest()));
     }
-    
-    
+
+
     // *
     // *  Sign message
     // *
-    
+
     public static function sign(string $msg, string $private_key): string
     {
-        if (!hex2bin($msg)) {
+        if (!self::isHex($msg)) {
             throw new NanoToolException("Invalid message: $msg");
         }
-        if (strlen($private_key) != 64 || !hex2bin($private_key)) {
+        if (!self::isHex($private_key, 64)) {
             throw new NanoToolException("Invalid private key: $private_key");
         }
-        
-        $salt = NanoSalt::instance();
-        $private_key = FieldElement::fromArray(\MikeRow\NanoPHP\Util\Uint::fromHex($private_key)->toUint8());
-        $public_key  = NanoSalt::crypto_sign_public_from_secret_key($private_key);
-        
-        $private_key->setSize(64);
-        $private_key->copy($public_key, 32, 32);
-        
-        $msg = \MikeRow\NanoPHP\Util\Uint::fromHex($msg)->toUint8();
-        $sm  = $salt->crypto_sign($msg, count($msg), $private_key);
-        
-        $signature = [];
-        for ($i = 0; $i < 64; $i++) {
-            $signature[$i] = $sm[$i];
-        }
-        
-        return \MikeRow\NanoPHP\Util\Uint::fromUint8Array($signature)->toHexString();
+
+        return strtoupper(bin2hex(
+            Ed25519Blake2b::sign(hex2bin($msg), hex2bin($private_key))
+        ));
     }
-    
-    
+
+
     // *
     // *  Validate signature
     // *
-    
+
     public static function validSign(string $msg, string $sig, string $account)
     {
-        if (!hex2bin($msg)) {
+        if (!self::isHex($msg)) {
             throw new NanoToolException("Invalid message: $msg");
         }
-        if (strlen($sig) != 128 || !hex2bin($sig)) {
+        if (!self::isHex($sig, 128)) {
             throw new NanoToolException("Invalid signature: $sig");
         }
         $public_key = self::account2public($account);
         if (!$public_key) {
             throw new NanoToolException("Invalid account: $account");
         }
-        
-        $sig = \MikeRow\NanoPHP\Util\Uint::fromHex($sig)->toUint8();
-        $msg = \MikeRow\NanoPHP\Util\Uint::fromHex($msg)->toUint8();
-        $public_key  = \MikeRow\NanoPHP\Util\Uint::fromHex($public_key)->toUint8();
-        
-        $sm = new SplFixedArray(64 + count($msg));
-        $m  = new SplFixedArray(64 + count($msg));
-        
-        for ($i = 0; $i < 64; $i++) {
-            $sm[$i] = $sig[$i];
-        }
-        for ($i = 0; $i < count($msg); $i++) {
-            $sm[$i+64] = $msg[$i];
-        }
-        
-        $open2 = NanoSalt::crypto_sign_open2($m, $sm, count($sm), $public_key);
-        
-        if ($open2 == null) {
+
+        $valid = Ed25519Blake2b::verify(hex2bin($msg), hex2bin($sig), hex2bin($public_key));
+
+        if (!$valid) {
             return false;
         }
-        
-        $open2 = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($open2)->toHexString();
-        
-        return $open2;
+
+        return strtoupper($msg);
     }
-    
-    
+
+
     // *
     // *  Multiplier to difficulty
     // *
-    
+
     public static function mult2diff(string $difficulty, float $multiplier): string
     {
-        if (strlen($difficulty) != 16 || !hex2bin($difficulty)) {
+        if (!self::isHex($difficulty, 16)) {
             throw new NanoToolException("Invalid difficulty: $difficulty");
         }
         if ($multiplier <= 0) {
             throw new NanoToolException("Invalid multiplier: $multiplier");
         }
-        
-        $ref = (float) 18446744073709551616;
-        $difficulty = hexdec($difficulty);
-        
-        return dechex(($difficulty - $ref) / $multiplier + $ref);
+
+        $two64 = '18446744073709551616';
+        $diff  = self::hex2dec($difficulty);
+
+        $delta = bcdiv(bcsub($two64, $diff), sprintf('%.12F', $multiplier), 0);
+        $value = bcsub($two64, $delta);
+
+        if (bccomp($value, '0') < 0) {
+            $value = '0';
+        }
+
+        return strtolower(str_pad(self::dec2hex($value), 16, '0', STR_PAD_LEFT));
     }
-    
-    
+
+
     // *
-    // *  Difficulty to muliplier
+    // *  Difficulty to multiplier
     // *
-    
+
     public static function diff2mult(string $base_difficulty, string $difficulty): float
     {
-        if (strlen($base_difficulty) != 16 || !hex2bin($base_difficulty)) {
+        if (!self::isHex($base_difficulty, 16)) {
             throw new NanoToolException("Invalid base difficulty: $base_difficulty");
         }
-        if (strlen($difficulty) != 16 || !hex2bin($difficulty)) {
+        if (!self::isHex($difficulty, 16)) {
             throw new NanoToolException("Invalid difficulty: $difficulty");
         }
 
-        $ref = (float) 18446744073709551616;
-        $base_difficulty = hexdec($base_difficulty);
-        $difficulty = hexdec($difficulty);
-        
-        return (float) ($ref - $base_difficulty) / (float) ($ref - $difficulty);
+        $two64 = '18446744073709551616';
+
+        return (float) bcdiv(
+            bcsub($two64, self::hex2dec($base_difficulty)),
+            bcsub($two64, self::hex2dec($difficulty)),
+            12
+        );
     }
-    
-    
+
+
+    // *
+    // *  Hexadecimal <-> decimal for arbitrary precision (bcmath)
+    // *
+
+    public static function hex2dec(string $hex): string
+    {
+        if (!ctype_xdigit($hex)) {
+            throw new NanoToolException("Invalid hexadecimal string: $hex");
+        }
+
+        $dec = '0';
+        for ($i = 0, $len = strlen($hex); $i < $len; $i += 8) {
+            $chunk = substr($hex, $i, 8);
+            $dec = bcadd(bcmul($dec, bcpow('2', (string) (strlen($chunk) * 4))), (string) hexdec($chunk));
+        }
+
+        return $dec;
+    }
+
+    public static function dec2hex(string $dec, int $bytes = 0): string
+    {
+        if (!ctype_digit($dec)) {
+            throw new NanoToolException("Invalid decimal string: $dec");
+        }
+
+        $hex = '';
+        while (bccomp($dec, '0') > 0) {
+            $hex = sprintf('%08X', (int) bcmod($dec, '4294967296')) . $hex;
+            $dec = bcdiv($dec, '4294967296', 0);
+        }
+
+        $hex = ltrim($hex, '0');
+        if ($hex === '') {
+            $hex = '0';
+        }
+        if (strlen($hex) % 2 != 0) {
+            $hex = '0' . $hex;
+        }
+        if ($bytes > 0) {
+            $hex = str_pad($hex, $bytes * 2, '0', STR_PAD_LEFT);
+        }
+
+        return $hex;
+    }
+
+
     // *
     // *  Generate work
     // *
-    
+
     public static function work(string $hash, string $difficulty): string
     {
-        if (strlen($hash) != 64 || !hex2bin($hash)) {
+        if (!self::isHex($hash, 64)) {
             throw new NanoToolException("Invalid hash: $hash");
         }
-        if (strlen($difficulty) != 16 || !hex2bin($difficulty)) {
+        if (!self::isHex($difficulty, 16)) {
             throw new NanoToolException("Invalid difficulty: $difficulty");
         }
-        
-        $hash = \MikeRow\NanoPHP\Util\Uint::fromHex($hash)->toUint8();
-        $difficulty = hex2bin($difficulty);
-        
-        if (!extension_loaded('blake2')) {
-            $b2b = new Blake2b();
-            $rng = random_bytes(8);
-            $rng = \MikeRow\NanoPHP\Util\bin2arr($rng);
-            
-            while (true) {
-                $output = new SplFixedArray(64);
-                
-                $ctx = $b2b->init(null, 8);
-                $b2b->update($ctx, $rng, 8);
-                $b2b->update($ctx, $hash, 32);
-                $b2b->finish($ctx, $output);
-                
-                $output = $output->toArray();
-                $output = array_slice($output, 0, 8);
-                $output = array_reverse($output);
-                //$output = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($output)->toHexString();
-                
-                if (strcasecmp(\MikeRow\NanoPHP\Util\Bin::arr2bin($output), $difficulty) >= 0) {
-                    return \MikeRow\NanoPHP\Util\Uint::fromUint8Array(array_reverse($rng))->toHexString();
-                }
 
-                $rng = $output;
+        $hash       = hex2bin($hash);
+        $difficulty = hex2bin($difficulty);
+
+        $nonce = random_bytes(8);
+
+        while (true) {
+            // Work value = BLAKE2b-8(nonce_LE || hash), interpreted little-endian
+            $output = strrev(Blake2b::hash($nonce . $hash, 8));
+
+            if (strcmp($output, $difficulty) >= 0) {
+                return strtoupper(bin2hex(strrev($nonce)));
             }
-        } else {
-            $hash = \MikeRow\NanoPHP\Util\Bin::arr2bin((array) $hash);
-            $rng = random_bytes(8);
-            
-            while (true) {
-                $output = strrev(blake2($rng . $hash, 8, null, true));
-                
-                if (strcasecmp($output, $difficulty) >= 0) {
-                    return \MikeRow\NanoPHP\Util\Uint::fromUint8Array(array_reverse(\MikeRow\NanoPHP\Util\bin2arr($rng)))->toHexString();
-                }
-                
-                $rng = $output;
-            }
+
+            $nonce = strrev($output);
         }
     }
-    
-    
+
+
     // *
     // *  Validate work
     // *
-    
+
     public static function validWork(string $hash, string $difficulty, string $work): bool
     {
-        if (strlen($hash) != 64 || !hex2bin($hash)) {
+        if (!self::isHex($hash, 64)) {
             throw new NanoToolException("Invalid hash: $hash");
         }
-        if (strlen($difficulty) != 16 || !hex2bin($difficulty)) {
+        if (!self::isHex($difficulty, 16)) {
             throw new NanoToolException("Invalid difficulty: $difficulty");
         }
-        if (strlen($work) != 16 || !hex2bin($work)) {
+        if (!self::isHex($work, 16)) {
             throw new NanoToolException("Invalid work: $work");
         }
-        
-        $hash = \MikeRow\NanoPHP\Util\Uint::fromHex($hash)->toUint8();
-        $work = \MikeRow\NanoPHP\Util\Uint::fromHex($work)->toUint8();
-        $work = array_reverse($work->toArray());
-        $work = SplFixedArray::fromArray($work);
-        
-        $res = new SplFixedArray(64);
-        
-        $blake2b = new Blake2b();
-        $ctx = $blake2b->init(null, 8);
-        $blake2b->update($ctx, $work, 8);
-        $blake2b->update($ctx, $hash, 32);
-        $blake2b->finish($ctx, $res);
-        
-        $res = $res->toArray();
-        $res = array_slice($res, 0, 8);
-        $res = array_reverse($res);
-        $res = \MikeRow\NanoPHP\Util\Uint::fromUint8Array($res)->toHexString();
-        
-        if (hexdec($res) >= hexdec($difficulty)) {
-            return true;
-        }
-        
-        return false;
+
+        $output = strrev(Blake2b::hash(strrev(hex2bin($work)) . hex2bin($hash), 8));
+
+        return strcmp($output, hex2bin($difficulty)) >= 0;
     }
 }

@@ -1,7 +1,7 @@
 {
-	"name" : "mikerow/nanophp",
+	"name" : "gigaionllc/nanophp",
 	"type" : "library",
-	"description" : "PHP libraries and tools for Nano currency",
+	"description" : "Dependency-free PHP libraries and tools for Nano currency",
 	"keywords" : [
 		"nano",
 		"raiblocks",
@@ -10,40 +10,36 @@
 		"rpc",
 		"ipc",
 		"websocket",
+		"wallet",
 		"tools",
 		"blocks"
 	],
-	"homepage" : "https://github.com/MikeRow/NanoPHP",
+	"homepage" : "https://github.com/GigaionLLC/NanoPHP",
 	"license" : "MIT",
 	"authors" : [{
+			"name" : "Gigaion, LLC",
+			"role" : "Maintainer"
+		}, {
 			"name" : "MikeRow",
-			"role" : "Developer"
+			"role" : "Original developer (MikeRow/NanoPHP, archived)"
 		}
 	],
-	"funding" : [{
-			"type" : "Nano",
-			"url" : "https://nanocrawler.cc/explorer/account/nano_1mikerow9bqzyqo4ejra6ugr1srerq1egwmacerquch3dz1wry7mkrz4768m"
-		}
-	],
+	"support" : {
+		"issues" : "https://github.com/GigaionLLC/NanoPHP/issues",
+		"source" : "https://github.com/GigaionLLC/NanoPHP"
+	},
 	"minimum-stability" : "stable",
 	"require" : {
-		"php-64bit" : "^7.2.0",
-		"ext-curl" : "*",
-		"ext-sockets" : "*",
-		"ext-gmp" : "*",
-		"ext-mbstring" : "*",
-		"ext-openssl" : "*",
-		"mikerow/salt" : "*",
-		"bitwasp/bitcoin-lib" : "1.0.*",
-		"textalk/websocket" : "*",
-		"google/flatbuffers" : "*"
+		"php-64bit" : "^8.1",
+		"ext-bcmath" : "*"
 	},
 	"suggest" : {
-		"ext-blake2" : "Install blake2 extension in order to speed up some functions: https://github.com/strawbrary/php-blake2"
+		"ext-openssl" : "Required only for RPC over https and WebSocket over wss",
+		"google/flatbuffers" : "Legacy: only for NanoIPC FlatBuffers preprocessing (modern nodes use JSON)"
 	},
 	"autoload" : {
 		"psr-4" : {
-			"MikeRow\\NanoPHP\\" : "src/"
+			"GigaionLLC\\NanoPHP\\" : "src/"
 		}
 	}
 }

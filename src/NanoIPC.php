@@ -1,6 +1,6 @@
 <?php
 
-namespace MikeRow\NanoPHP;
+namespace GigaionLLC\NanoPHP;
 
 use \Exception;
 
@@ -39,8 +39,8 @@ class NanoIPC
     
     public function __construct(
         string $transport_type,
-        array  $params          = null,
-        array  $options         = null
+        ?array  $params          = null,
+        ?array  $options         = null
     ) {
         // * Unix domain socket
         
@@ -262,7 +262,7 @@ class NanoIPC
         // * 3
         
         } elseif ($this->nanoEncoding == 3) {
-            if (!class_exists('\\MikeRow\\NanoPHP\\NanoAPI\\' . $method, true)) {
+            if (!class_exists('\\GigaionLLC\\NanoPHP\\NanoAPI\\' . $method, true)) {
                $this->error = 'Invalid call';
                return false;
             }
@@ -275,32 +275,32 @@ class NanoIPC
             
             $correlation_id = $builder->createString((string) $this->id);
             $credentials    = $builder->createString($this->nanoAPIKey);
-            $message_type   = constant("\\MikeRow\\NanoPHP\\NanoAPI\\Message::$method");
+            $message_type   = constant("\\GigaionLLC\\NanoPHP\\NanoAPI\\Message::$method");
             
             // Build arguments
             call_user_func_array(
-                '\\MikeRow\\NanoPHP\\NanoAPI\\' . $method . '::start' . $method,
+                '\\GigaionLLC\\NanoPHP\\NanoAPI\\' . $method . '::start' . $method,
                 [$builder]
             );
             
             foreach ($params[0] as $key => $value) {
-                if (!method_exists('\\MikeRow\\NanoPHP\\NanoAPI\\' . $method, 'add' . $key)) {
+                if (!method_exists('\\GigaionLLC\\NanoPHP\\NanoAPI\\' . $method, 'add' . $key)) {
                     $this->error = 'Invalid call';
                     return false;
                 }
                 call_user_func_array(
-                    '\\MikeRow\\NanoPHP\\NanoAPI\\' . $method . '::add' . $key,
+                    '\\GigaionLLC\\NanoPHP\\NanoAPI\\' . $method . '::add' . $key,
                     [$builder, $value]
                 );
             }
             
             $message = call_user_func_array(
-                '\\MikeRow\\NanoPHP\\NanoAPI\\' . $method . '::end' . $method,
+                '\\GigaionLLC\\NanoPHP\\NanoAPI\\' . $method . '::end' . $method,
                 [$builder]
             );
             
             // Build envelope
-            $envelope = \MikeRow\NanoPHP\NanoAPI\Envelope::createEnvelope(
+            $envelope = \GigaionLLC\NanoPHP\NanoAPI\Envelope::createEnvelope(
                 $builder,
                 null,
                 $credentials,
@@ -399,9 +399,9 @@ class NanoIPC
             
         } elseif ($this->nanoEncoding == 3) {
             $buffer = \Google\FlatBuffers\ByteBuffer::wrap($this->responseRaw);
-            $envelope = \MikeRow\NanoPHP\NanoAPI\Envelope::getRootAsEnvelope($buffer);
+            $envelope = \GigaionLLC\NanoPHP\NanoAPI\Envelope::getRootAsEnvelope($buffer);
             
-            $this->responseType = \MikeRow\NanoPHP\NanoAPI\Message::Name($envelope->getMessageType());
+            $this->responseType = \GigaionLLC\NanoPHP\NanoAPI\Message::Name($envelope->getMessageType());
             $this->responseTime = $envelope->getTime();
             
             if ($envelope->getCorrelationId() != $this->id) {
@@ -409,10 +409,10 @@ class NanoIPC
             }
             
             if ($this->responseType == 'Error') {
-                $this->error     = $envelope->getMessage(new \MikeRow\NanoPHP\NanoAPI\Error())->getMessage();
-                $this->errorCode = $envelope->getMessage(new \MikeRow\NanoPHP\NanoAPI\Error())->getCode();
+                $this->error     = $envelope->getMessage(new \GigaionLLC\NanoPHP\NanoAPI\Error())->getMessage();
+                $this->errorCode = $envelope->getMessage(new \GigaionLLC\NanoPHP\NanoAPI\Error())->getCode();
             } else {
-                $model = '\\MikeRow\\NanoPHP\\NanoAPI\\' . $this->responseType;
+                $model = '\\GigaionLLC\\NanoPHP\\NanoAPI\\' . $this->responseType;
                 
                 $methods = get_class_methods($model);
                 foreach ($methods as $method) {

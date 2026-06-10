@@ -1,6 +1,6 @@
 <?php
 
-namespace MikeRow\NanoPHP;
+namespace GigaionLLC\NanoPHP;
 
 use \Exception;
 

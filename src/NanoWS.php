@@ -1,8 +1,10 @@
 <?php
 
-namespace MikeRow\NanoPHP;
+namespace GigaionLLC\NanoPHP;
 
 use \Exception;
+use GigaionLLC\NanoPHP\Util\WebSocketClient;
+use GigaionLLC\NanoPHP\Util\WebSocketClientException;
 
 class NanoWSException extends Exception{}
 
@@ -27,8 +29,8 @@ class NanoWS
         string $protocol = 'ws',
         string $hostname = 'localhost',
         int    $port     = 7078,
-        string $url      = null,
-        array  $options  = null
+        ?string $url      = null,
+        ?array  $options  = null
     ) {
         // Protocol
         if ($protocol != 'ws' &&
@@ -45,22 +47,22 @@ class NanoWS
         }
         
         $this->options = [];
-        
+
         // Timeout
         if (isset($options['timeout'])) {
             $this->options['timeout'] = (float) $options['timeout'];
-        } 
-        
+        }
+
         // Fragment size
         if (isset($options['fragment_size'])) {
             $this->options['fragment_size'] = (int) $options['fragment_size'];
-        } 
-        
+        }
+
         // Context
         if (isset($options['context']) && is_array($options['context'])) {
-            $this->options['context'] = stream_context_create($options['context']);
+            $this->options['context'] = $options['context'];
         }
-        
+
         // Headers
         if (isset($options['headers']) && is_array($options['headers'])) {
             $this->options['headers'] = $options['headers'];
@@ -78,25 +80,26 @@ class NanoWS
     // *
     
     public function open(): bool
-    {   
+    {
         try {
-            $this->websocket = new \WebSocket\Client("{$this->protocol}://{$this->hostname}:{$this->port}/{$this->url}", $this->options);
+            $this->websocket = new WebSocketClient("{$this->protocol}://{$this->hostname}:{$this->port}/{$this->url}", $this->options);
             return true;
-        } catch (\WebSocket\ConnectionException $e) {
+        } catch (WebSocketClientException $e) {
+            $this->websocket = null;
             return false;
         }
     }
-    
-    
+
+
     // *
     // *  Close connection
     // *
-    
+
     public function close()
     {
         if ($this->websocket != null) {
             $this->websocket->close();
-            $this->weboscket = null;
+            $this->websocket = null;
         }
     }
     
@@ -105,7 +108,7 @@ class NanoWS
     // *  Subscribe to topic
     // *
     
-    public function subscribe(string $topic, array $options = null, bool $ack = false): int
+    public function subscribe(string $topic, ?array $options = null, bool $ack = false): int
     {
         // Check WebSocket connection
         if ($this->websocket == null) {
@@ -249,10 +252,16 @@ class NanoWS
         
         while (true) {
             try {
-                return json_decode($this->websocket->receive(), true);
-            } catch (\WebSocket\ConnectionException $e) {
-                //
+                $message = $this->websocket->receive();
+            } catch (WebSocketClientException $e) {
+                $this->websocket = null;
+                throw new NanoWSException("WebSocket connection lost: {$e->getMessage()}");
             }
+
+            if ($message !== null) {
+                return json_decode($message, true);
+            }
+            // null = read timeout; keep listening
         }
     }
 }

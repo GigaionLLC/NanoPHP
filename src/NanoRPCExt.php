@@ -1,6 +1,6 @@
 <?php
 
-namespace MikeRow\NanoPHP;
+namespace GigaionLLC\NanoPHP;
 
 use \Exception;
 
@@ -32,11 +32,11 @@ class NanoRPCExt extends NanoRPC
         }
         
         // Balance ok?
-        if (gmp_cmp($wallet_info['balance'], 1) < 0) {
+        if (bccomp($wallet_info['balance'], '1') < 0) {
             $this->error = 'Insufficient balance';
             return false;
         }
-        
+
         // Destination ok?
         if (!NanoTool::account2public($destination, false)) {
             $this->error = 'Bad destination';
@@ -61,11 +61,11 @@ class NanoRPCExt extends NanoRPC
         // Sort balances
         if ($sort == 'asc') {
             uasort($wallet_balances['balances'], function ($a, $b) {
-                return gmp_cmp($a['balance'], $b['balance']);
+                return bccomp($a['balance'], $b['balance']);
             });
         } elseif ($sort == 'desc') {
             uasort($wallet_balances['balances'], function ($a, $b) {
-                return gmp_cmp($b['balance'], $a['balance']);
+                return bccomp($b['balance'], $a['balance']);
             });
         } else {
             // Do nothing
@@ -153,12 +153,12 @@ class NanoRPCExt extends NanoRPC
             return false;
         }
         
-        if (gmp_cmp($amount, 1) < 0) {
+        if (bccomp($amount, '1') < 0) {
             $this->error = 'Bad amount';
             return false;
         }
-        
-        if (gmp_cmp($wallet_info['balance'], $amount) < 0) {
+
+        if (bccomp($wallet_info['balance'], $amount) < 0) {
             $this->error = 'Insufficient balance';
             return false;
         }
@@ -183,11 +183,11 @@ class NanoRPCExt extends NanoRPC
         // Sort balances
         if ($sort == 'asc') {
             uasort($wallet_balances['balances'], function ($a, $b) {
-                return gmp_cmp($a['balance'], $b['balance']);
+                return bccomp($a['balance'], $b['balance']);
             });
         } elseif ($sort == 'desc') {
             uasort($wallet_balances['balances'], function ($a, $b) {
-                return gmp_cmp($b['balance'], $a['balance']);
+                return bccomp($b['balance'], $a['balance']);
             });
         } else {
             // Do nothing
@@ -195,15 +195,15 @@ class NanoRPCExt extends NanoRPC
         
         // Select accounts
         foreach ($wallet_balances['balances'] as $account => $balances) {
-            if (gmp_cmp($balances['balance'], $amount_left) >= 0) {
+            if (bccomp($balances['balance'], $amount_left) >= 0) {
                 $selected_accounts[$account] = $amount_left;
                 $amount_left                 = '0';
             } else {
                 $selected_accounts[$account] = $balances['balance'];
-                $amount_left                 = gmp_strval(gmp_sub($amount_left, $balances['balance']));
+                $amount_left                 = bcsub($amount_left, $balances['balance']);
             }
-            
-            if (gmp_cmp($amount_left, '0') <= 0) {
+
+            if (bccomp($amount_left, '0') <= 0) {
                 break; // Amount reached
             }
         }
@@ -290,20 +290,20 @@ class NanoRPCExt extends NanoRPC
         // Check every weight and sum them
         foreach ($wallet_accounts['accounts'] as $account) {
             $account_weight              = $this->account_weight(['account'=>$account]);
-            $wallet_weight               = gmp_add($wallet_weight, $account_weight['weight']);
-            $return['weights'][$account] = gmp_strval($account_weight['weight']);
+            $wallet_weight               = bcadd($wallet_weight, $account_weight['weight']);
+            $return['weights'][$account] = (string) $account_weight['weight'];
         }
-        
-        $return['weight'] = gmp_strval($wallet_weight);
+
+        $return['weight'] = $wallet_weight;
         
         // Sort weights
         if ($sort == 'asc') {
             uasort($return['weights'], function ($a, $b) {
-                return gmp_cmp($a, $b);
+                return bccomp($a, $b);
             });
         } elseif ($sort == 'desc') {
             uasort($return['weights'], function ($a, $b) {
-                return gmp_cmp($b, $a);
+                return bccomp($b, $a);
             });
         } else {
             // Do nothing

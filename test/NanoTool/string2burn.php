@@ -2,7 +2,7 @@
 
 require __DIR__ . '/../autoload.php';
 
-use MikeRow\NanoPHP\NanoTool;
+use GigaionLLC\NanoPHP\NanoTool;
 
 $burn = NanoTool::string2burn('he11o', '1', '1');
 

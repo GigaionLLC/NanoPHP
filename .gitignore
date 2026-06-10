@@ -1,3 +1,8 @@
 composer.lock
 .project
 /vendor
+
+# Never commit wallet seeds (e.g. from the README/CLI examples:
+# php nanophp new | tee seed.txt)
+seed.txt
+*.seed

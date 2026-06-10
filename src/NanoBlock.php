@@ -1,6 +1,6 @@
 <?php
 
-namespace MikeRow\NanoPHP;
+namespace GigaionLLC\NanoPHP;
 
 use \Exception;
 
@@ -112,26 +112,26 @@ class NanoBlock
         }
         
         // Build block
-        $balance = dechex($received_amount);
-        $balance = str_repeat('0', (32 - strlen($balance))) . $balance;
-        
+        $balance     = $received_amount;
+        $balance_hex = NanoTool::dec2hex($balance, 16);
+
         $this->rawBlockId   = [];
         $this->rawBlockId[] = NanoTool::PREAMBLE_HEX;
         $this->rawBlockId[] = $this->publicKey;
         $this->rawBlockId[] = NanoTool::EMPTY32_HEX;
         $this->rawBlockId[] = NanoTool::account2public($representative);
-        $this->rawBlockId[] = $balance;
+        $this->rawBlockId[] = $balance_hex;
         $this->rawBlockId[] = $pairing_block_id;
-        
+
         $this->blockId   = NanoTool::hashHexs($this->rawBlockId);
         $this->signature = NanoTool::sign($this->blockId, $this->privateKey);
-        
+
         $this->block = [
             'type'           => 'state',
             'account'        => $this->account,
             'previous'       => NanoTool::EMPTY32_HEX,
             'representative' => $representative,
-            'balance'        => hexdec($balance),
+            'balance'        => $balance,
             'link'           => $pairing_block_id,
             'signature'      => $this->signature,
             'work'           => $this->work
@@ -155,7 +155,7 @@ class NanoBlock
     // *  Build receive block
     // *
     
-    public function receive(string $pairing_block_id, string $received_amount, string $representative = null): array
+    public function receive(string $pairing_block_id, string $received_amount, ?string $representative = null): array
     {
         // Check previous block info and ID
         if (!isset($this->prevBlock['balance']) ||
@@ -189,30 +189,26 @@ class NanoBlock
         }
         
         // Build block
-        $balance = dechex(
-            gmp_strval(
-                gmp_add($this->prevBlock['balance'], $received_amount)
-            )
-        );
-        $balance = str_repeat('0', (32 - strlen($balance))) . $balance;
-        
+        $balance     = bcadd($this->prevBlock['balance'], $received_amount);
+        $balance_hex = NanoTool::dec2hex($balance, 16);
+
         $this->rawBlockId   = [];
         $this->rawBlockId[] = NanoTool::PREAMBLE_HEX;
         $this->rawBlockId[] = $this->publicKey;
         $this->rawBlockId[] = $this->prevBlockId;
         $this->rawBlockId[] = NanoTool::account2public($representative);
-        $this->rawBlockId[] = $balance;
+        $this->rawBlockId[] = $balance_hex;
         $this->rawBlockId[] = $pairing_block_id;
-        
+
         $this->blockId   = NanoTool::hashHexs($this->rawBlockId);
         $this->signature = NanoTool::sign($this->blockId, $this->privateKey);
-        
+
         $this->block = [
             'type'           => 'state',
             'account'        => $this->account,
             'previous'       => $this->prevBlockId,
             'representative' => $representative,
-            'balance'        => hexdec($balance),
+            'balance'        => $balance,
             'link'           => $pairing_block_id,
             'signature'      => $this->signature,
             'work'           => $this->work
@@ -236,7 +232,7 @@ class NanoBlock
     // *  Build send block
     // *
     
-    public function send(string $destination, string $sending_amount, string $representative = null): array
+    public function send(string $destination, string $sending_amount, ?string $representative = null): array
     {
         // Check previous block info and ID
         if (!isset($this->prevBlock['balance']) ||
@@ -270,33 +266,29 @@ class NanoBlock
         }
         
         // Build block
-        $balance = dechex(
-            gmp_strval(
-                gmp_sub($this->prevBlock['balance'], $sending_amount)
-            )
-        );
-        if (strpos($balance, '-') !== false) {
+        $balance = bcsub($this->prevBlock['balance'], $sending_amount);
+        if (bccomp($balance, '0') < 0) {
             throw new NanoBlockException("Insufficient balance: $balance");
         }
-        $balance = str_repeat('0', (32 - strlen($balance))) . $balance;
-        
+        $balance_hex = NanoTool::dec2hex($balance, 16);
+
         $this->rawBlockId   = [];
         $this->rawBlockId[] = NanoTool::PREAMBLE_HEX;
         $this->rawBlockId[] = $this->publicKey;
         $this->rawBlockId[] = $this->prevBlockId;
         $this->rawBlockId[] = NanoTool::account2public($representative);
-        $this->rawBlockId[] = $balance;
+        $this->rawBlockId[] = $balance_hex;
         $this->rawBlockId[] = NanoTool::account2public($destination);
-        
+
         $this->blockId   = NanoTool::hashHexs($this->rawBlockId);
         $this->signature = NanoTool::sign($this->blockId, $this->privateKey);
-        
+
         $this->block = [
             'type'           => 'state',
             'account'        => $this->account,
             'previous'       => $this->prevBlockId,
             'representative' => $representative,
-            'balance'        => hexdec($balance),
+            'balance'        => $balance,
             'link'           => $destination,
             'signature'      => $this->signature,
             'work'           => $this->work
@@ -345,26 +337,26 @@ class NanoBlock
         }
         
         // Build block
-        $balance = dechex($this->prevBlock['balance']);
-        $balance = str_repeat('0', (32 - strlen($balance))) . $balance;
-        
+        $balance     = $this->prevBlock['balance'];
+        $balance_hex = NanoTool::dec2hex($balance, 16);
+
         $this->rawBlockId   = [];
         $this->rawBlockId[] = NanoTool::PREAMBLE_HEX;
         $this->rawBlockId[] = $this->publicKey;
         $this->rawBlockId[] = $this->prevBlockId;
         $this->rawBlockId[] = NanoTool::account2public($representative);
-        $this->rawBlockId[] = $balance;
+        $this->rawBlockId[] = $balance_hex;
         $this->rawBlockId[] = NanoTool::EMPTY32_HEX;
-        
+
         $this->blockId   = NanoTool::hashHexs($this->rawBlockId);
         $this->signature = NanoTool::sign($this->blockId, $this->privateKey);
-        
+
         $this->block = [
             'type'           => 'state',
             'account'        => $this->account,
             'previous'       => $this->prevBlockId,
             'representative' => $representative,
-            'balance'        => hexdec($balance),
+            'balance'        => $balance,
             'link'           => NanoTool::EMPTY32_HEX,
             'signature'      => $this->signature,
             'work'           => $this->work

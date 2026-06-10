@@ -1,0 +1,378 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * nanophp — command line Nano wallet, modeled after atto
+ * (https://github.com/codesoap/atto), built on the NanoPHP library.
+ *
+ * Usage:
+ *   php nanophp -v
+ *   php nanophp n[ew]
+ *   php nanophp no[de]
+ *   php nanophp [-a ACCOUNT_INDEX] a[ddress]
+ *   php nanophp [-a ACCOUNT_INDEX] b[alance]
+ *   php nanophp [-a ACCOUNT_INDEX] rec[eive]
+ *   php nanophp [-a ACCOUNT_INDEX] r[epresentative] [NEW_REPRESENTATIVE]
+ *   php nanophp [-a ACCOUNT_INDEX] [-y] s[end] AMOUNT RECEIVER
+ *
+ * Like atto, every subcommand except `new` and `node` expects a seed as the
+ * first line of standard input:
+ *   php nanophp new > seed.txt
+ *   php nanophp address < seed.txt
+ *
+ * The node subcommand probes a built-in list of public RPC nodes, reports
+ * which respond, and saves the first working one. Probing happens ONLY when
+ * you explicitly run `php nanophp node` — no other command ever probes or
+ * picks a node on its own; they just use the selection below.
+ *
+ * Node selection precedence (highest first):
+ *   1. NANOPHP_NODE environment variable
+ *   2. the node previously saved by `php nanophp node` (~/.nanophp-node)
+ *   3. http://localhost:7076
+ *
+ * Environment:
+ *   NANOPHP_NODE                 RPC endpoint of the node to use, e.g.
+ *                                http://localhost:7076 (https requires the
+ *                                openssl extension)
+ *   NANOPHP_BASIC_AUTH_USERNAME  The username for HTTP Basic Authentication.
+ *                                If set, HTTP Basic Authentication will be
+ *                                used when making requests to the node.
+ *   NANOPHP_BASIC_AUTH_PASSWORD  The password to use for HTTP Basic
+ *                                Authentication.
+ */
+
+require __DIR__ . '/autoload.php';
+
+use GigaionLLC\NanoPHP\NanoRPC;
+use GigaionLLC\NanoPHP\NanoTool;
+use GigaionLLC\NanoPHP\NanoWallet;
+
+const VERSION = '1.0.0';
+
+const USAGE = <<<TXT
+Usage:
+	php nanophp -v
+	php nanophp n[ew]
+	php nanophp no[de]
+	php nanophp [-a ACCOUNT_INDEX] a[ddress]
+	php nanophp [-a ACCOUNT_INDEX] b[alance]
+	php nanophp [-a ACCOUNT_INDEX] rec[eive]
+	php nanophp [-a ACCOUNT_INDEX] r[epresentative] [NEW_REPRESENTATIVE]
+	php nanophp [-a ACCOUNT_INDEX] [-y] s[end] AMOUNT RECEIVER
+
+If the -v flag is provided, nanophp will print its version number.
+
+The new subcommand generates a new seed. node probes the built-in list of
+public RPC nodes and saves the first working one for later commands (probing
+only ever happens when node is run explicitly). The remaining subcommands
+expect a seed as the first line of standard input:
+	php nanophp new | tee seed.txt | php nanophp address
+
+balance receives any receivable blocks, then prints the account balance.
+receive only receives receivable blocks. representative prints the current
+representative, or changes it when NEW_REPRESENTATIVE is given. send sends
+AMOUNT (in NANO) to RECEIVER after confirmation (skip asking with -y).
+
+ACCOUNT_INDEX selects among accounts derived from the same seed
+(0 to 4294967295, default 0).
+
+Node selection precedence: NANOPHP_NODE env var, then the node saved by
+`php nanophp node` (~/.nanophp-node), then http://localhost:7076.
+
+Environment:
+	NANOPHP_NODE                 Node RPC endpoint, e.g. http://localhost:7076
+	NANOPHP_BASIC_AUTH_USERNAME  The username for HTTP Basic Authentication.
+	                             If set, HTTP Basic Authentication will be
+	                             used when making requests to the node.
+	NANOPHP_BASIC_AUTH_PASSWORD  The password to use for HTTP Basic
+	                             Authentication.
+
+TXT;
+
+// Public Nano RPC nodes probed by `nanophp node`, in preferred order.
+const PUBLIC_NODES = [
+    'https://rainstorm.city/api',
+    'https://node.somenano.com/proxy',
+    'https://nanoslo.0x.no/proxy',
+    'https://www.bitrequest.app:8020/',
+];
+
+// *
+// *  Argument parsing (atto-style flags)
+// *
+
+$args  = array_slice($argv, 1);
+$index = 0;
+$yes   = false;
+$words = [];
+
+for ($i = 0; $i < count($args); $i++) {
+    switch ($args[$i]) {
+        case '-a':
+            if (!isset($args[$i + 1]) || !ctype_digit($args[$i + 1])) {
+                fail(USAGE);
+            }
+            $index = (int) $args[++$i];
+            if ($index > 4294967295) {
+                fail("Error: account index must be 0 to 4294967295");
+            }
+            break;
+
+        case '-y':
+            $yes = true;
+            break;
+
+        case '-v':
+            echo VERSION, "\n";
+            exit(0);
+
+        case '-h':
+        case '--help':
+            echo USAGE;
+            exit(0);
+
+        default:
+            $words[] = $args[$i];
+    }
+}
+
+if (count($words) < 1) {
+    fail(USAGE);
+}
+
+$command = $words[0];
+
+function fail(string $message): void
+{
+    fwrite(STDERR, rtrim($message) . "\n");
+    exit(1);
+}
+
+function homeDir(): string
+{
+    $home = getenv('HOME') ?: getenv('USERPROFILE');
+
+    return $home ?: sys_get_temp_dir();
+}
+
+function nodeConfigPath(): string
+{
+    return homeDir() . DIRECTORY_SEPARATOR . '.nanophp-node';
+}
+
+function savedNode(): ?string
+{
+    $path = nodeConfigPath();
+    if (is_file($path)) {
+        $value = trim((string) file_get_contents($path));
+        if ($value !== '') {
+            return $value;
+        }
+    }
+
+    return null;
+}
+
+function rpcFromEndpoint(string $endpoint, ?int $timeout = null): NanoRPC
+{
+    $parts = parse_url($endpoint);
+
+    if ($parts === false || !isset($parts['host'])) {
+        fail("Error: cannot parse node endpoint: $endpoint");
+    }
+
+    $scheme  = $parts['scheme'] ?? 'http';
+    $port    = $parts['port'] ?? ($scheme == 'https' ? 443 : 7076);
+    $options = [];
+
+    if ($timeout !== null) {
+        $options['timeout'] = $timeout;
+    }
+
+    // HTTP Basic Authentication, like atto's ATTO_BASIC_AUTH_* variables
+    $username = getenv('NANOPHP_BASIC_AUTH_USERNAME');
+    if ($username !== false && $username !== '') {
+        $password = getenv('NANOPHP_BASIC_AUTH_PASSWORD');
+        $options['headers'] = [
+            'Authorization: Basic ' . base64_encode($username . ':' . ($password === false ? '' : $password))
+        ];
+    }
+
+    return new NanoRPC($scheme, $parts['host'], $port, $parts['path'] ?? null, $options ?: null);
+}
+
+function node(): NanoRPC
+{
+    // Precedence: env var > node saved by `nanophp node` > localhost
+    $endpoint = getenv('NANOPHP_NODE') ?: (savedNode() ?? 'http://localhost:7076');
+
+    return rpcFromEndpoint($endpoint);
+}
+
+function autoNode(): void
+{
+    $total = count(PUBLIC_NODES);
+    $selected = null;
+
+    fwrite(STDERR, "Probing public Nano RPC nodes (preferred order)...\n\n");
+
+    foreach (PUBLIC_NODES as $i => $endpoint) {
+        fwrite(STDERR, sprintf("  [%d/%d] %-34s ... ", $i + 1, $total, $endpoint));
+
+        try {
+            $rpc      = rpcFromEndpoint($endpoint, 6);
+            $response = $rpc->block_count();
+
+            if ($response !== false && isset($response['count'])) {
+                fwrite(STDERR, "online (block height " . $response['count'] . ")\n");
+                $selected = $endpoint;
+                break;
+            }
+
+            fwrite(STDERR, "no (" . ($rpc->error ?: 'unexpected response') . ")\n");
+        } catch (Exception $e) {
+            fwrite(STDERR, "no (" . $e->getMessage() . ")\n");
+        }
+    }
+
+    fwrite(STDERR, "\n");
+
+    if ($selected === null) {
+        fail("No public node responded. Check your internet connection" .
+             " (and that the openssl extension is enabled, since these nodes use https).");
+    }
+
+    $path = nodeConfigPath();
+    if (@file_put_contents($path, $selected . "\n") === false) {
+        fwrite(STDERR, "Selected node: $selected\n");
+        fwrite(STDERR, "Warning: could not save it to $path; set NANOPHP_NODE manually.\n");
+    } else {
+        fwrite(STDERR, "Selected node: $selected\n");
+        fwrite(STDERR, "Saved to $path — nanophp will use it automatically from now on.\n");
+    }
+
+    fwrite(STDERR, "\nTo also export it into your current shell session:\n");
+    fwrite(STDERR, "  PowerShell:  \$env:NANOPHP_NODE = \"$selected\"\n");
+    fwrite(STDERR, "  bash/zsh:    export NANOPHP_NODE=$selected\n");
+
+    // The chosen endpoint goes to stdout so it can be captured by scripts.
+    echo $selected, "\n";
+}
+
+function seedFromStdin(): string
+{
+    $line = fgets(STDIN);
+    if ($line === false) {
+        fail('Error: could not read seed from standard input');
+    }
+    // Strip byte order marks and NUL bytes: PowerShell pipelines and
+    // UTF-16 files prepend/intersperse these around the hex characters
+    $line = str_replace(["\xEF\xBB\xBF", "\xFF\xFE", "\xFE\xFF", "\x00"], '', $line);
+    $seed = strtoupper(trim($line));
+    if (strlen($seed) != 64 || !ctype_xdigit($seed)) {
+        fail('Error: could not parse seed');
+    }
+
+    return $seed;
+}
+
+function wallet(int $index): NanoWallet
+{
+    return NanoWallet::fromSeed(node(), seedFromStdin(), $index);
+}
+
+function nanoAmount(string $raw): string
+{
+    return ($raw == '0' ? '0' : NanoTool::raw2den($raw, 'NANO')) . ' NANO';
+}
+
+function confirmOnTerminal(string $prompt): void
+{
+    $tty = @fopen(PHP_OS_FAMILY == 'Windows' ? 'CONIN$' : '/dev/tty', 'r');
+    if ($tty === false) {
+        fail('Error: no terminal available for confirmation; use -y to skip it');
+    }
+    fwrite(STDERR, $prompt);
+    $answer = trim((string) fgets($tty));
+    fclose($tty);
+    if ($answer != 'y' && $answer != 'Y') {
+        fwrite(STDERR, "Send aborted.\n");
+        exit(0);
+    }
+}
+
+// *
+// *  Subcommands (first letter is enough, like atto)
+// *
+
+try {
+    switch ($command[0]) {
+        case 'n': // new | node ("no..." selects node, "n"/"ne"/"new" means new)
+            if (strlen($command) >= 2 && strpos('node', $command) === 0) {
+                autoNode();
+            } else {
+                echo NanoWallet::newSeed(), "\n";
+            }
+            break;
+
+        case 'a': // address
+            $seed = seedFromStdin();
+            echo NanoTool::seed2keys($seed, $index, true)[2], "\n";
+            break;
+
+        case 'b': // balance
+            $wallet = wallet($index);
+            foreach ($wallet->receiveAll() as $r) {
+                fwrite(STDERR, "Received " . nanoAmount($r['amount']) . " in block {$r['hash']}\n");
+            }
+            // Locally tracked balance, like atto: just-processed receives are
+            // included even before the node reports them as confirmed
+            echo nanoAmount($wallet->accountInfo()['balance'] ?? '0'), "\n";
+            break;
+
+        case 'r': // receive | representative ("rec..." selects receive, bare "r" means representative like atto)
+            if (strlen($command) >= 3 && strpos('receive', $command) === 0) {
+                $wallet = wallet($index);
+                $processed = $wallet->receiveAll();
+                foreach ($processed as $r) {
+                    echo "Received " . nanoAmount($r['amount']) . " in block {$r['hash']}\n";
+                }
+                if (count($processed) == 0) {
+                    fwrite(STDERR, "Nothing to receive.\n");
+                }
+                break;
+            }
+            if (strpos('representative', $command) !== 0) {
+                fail(USAGE);
+            }
+
+            $wallet = wallet($index);
+            if (count($words) == 2) {
+                $hash = $wallet->changeRepresentative($words[1]);
+                fwrite(STDERR, "Changed representative in block $hash\n");
+            } else {
+                echo $wallet->representative(), "\n";
+            }
+            break;
+
+        case 's': // send
+            if (count($words) != 3) {
+                fail(USAGE);
+            }
+            [, $amount, $receiver] = $words;
+
+            if (!$yes) {
+                confirmOnTerminal("Send $amount NANO to $receiver? [y/N]: ");
+            }
+
+            $wallet = wallet($index);
+            $hash = $wallet->send($amount, $receiver);
+            echo $hash, "\n";
+            break;
+
+        default:
+            fail(USAGE);
+    }
+} catch (Exception $e) {
+    fail('Error: ' . $e->getMessage());
+}
