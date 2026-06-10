@@ -22,6 +22,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Node.js 20 actions are deprecated (removed from runners September 2026);
+  # run all JavaScript actions on Node 24 now so issues surface early
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     name: PHP ${{ matrix.php }}
@@ -32,7 +37,7 @@ jobs:
         php: ['8.1', '8.4', '8.5']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
