@@ -1,5 +1,7 @@
 # NanoPHP
 
+[![CI](https://github.com/GigaionLLC/NanoPHP/actions/workflows/ci.yml/badge.svg)](https://github.com/GigaionLLC/NanoPHP/actions/workflows/ci.yml)
+
 Self-contained PHP library and command line wallet for the
 [Nano](https://nano.org) currency. No Composer, no extensions beyond bcmath,
 no third-party code — all cryptography (BLAKE2b, Nano's Ed25519-BLAKE2b),

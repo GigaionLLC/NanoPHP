@@ -66,6 +66,12 @@ All three test scripts exit non-zero on failure and must pass before pushing.
 There is no PHPUnit; tests are plain scripts using the `check()` helper.
 `test/NanoTool/*.php` are runnable usage examples, not assertions.
 
+CI (`.github/workflows/ci.yml`) runs the lint, all three suites, and a CLI
+smoke test on every push to master and every pull request, across PHP 8.1
+(the version floor), 8.4, and 8.5 with only the bcmath extension installed —
+which doubles as proof of the zero-dependency claim. Keep the workflow's
+suite list in sync when adding test scripts.
+
 ## Architecture in one paragraph
 
 `Crypto\Blake2b` and `Crypto\Ed25519Blake2b` are the foundation. `NanoTool`

@@ -1,0 +1,74 @@
+# Lint and full offline verification on every push and pull request.
+#
+# The test suites are the same ones documented in AGENT.md:
+#   verify.php    - crypto correctness: RFC 7693 BLAKE2b vectors, the official
+#                   Nano key-derivation vector (private -> public -> address),
+#                   real mainnet block hashes/signatures/work, sign/verify
+#                   roundtrips and negative tests
+#   wallet.php    - NanoWallet against a mock node, including detection of a
+#                   node that lies about account state
+#   websocket.php - bundled RFC 6455 client against a local echo server
+#
+# Runs on the oldest supported PHP (8.1) and current PHP to guard the
+# version floor declared in composer.json.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.4', '8.5']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # bcmath is the library's only required extension; nothing else is
+          # installed on purpose, to prove the zero-dependency claim in CI
+          extensions: bcmath
+          coverage: none
+
+      - name: Lint all PHP sources
+        run: |
+          set -e
+          for f in $(find src test -name '*.php') nanophp autoload.php; do
+            php -l "$f" > /dev/null
+          done
+          echo "lint OK"
+
+      - name: Crypto and tools suite (keys, addresses, signatures, work)
+        run: php test/native/verify.php
+
+      - name: NanoWallet integration suite (mock node)
+        run: php test/native/wallet.php
+
+      - name: WebSocket client suite (echo server)
+        run: php test/native/websocket.php
+
+      - name: CLI smoke test (offline commands)
+        run: |
+          set -e
+          php nanophp -v
+          php nanophp -h > /dev/null
+          SEED=$(php nanophp new)
+          test "${#SEED}" -eq 64
+          ADDRESS=$(echo "$SEED" | php nanophp address)
+          case "$ADDRESS" in
+            nano_*) echo "address derivation OK: $ADDRESS" ;;
+            *) echo "unexpected address: $ADDRESS"; exit 1 ;;
+          esac
