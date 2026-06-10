@@ -10,9 +10,8 @@ Images are published to GitHub Container Registry by CI:
 
 | Tag | Meaning |
 |---|---|
-| `ghcr.io/gigaionllc/nanophp:latest` | latest release |
-| `ghcr.io/gigaionllc/nanophp:1`, `:1.0`, `:1.0.0` | semver pins |
-| `ghcr.io/gigaionllc/nanophp:edge` | current master |
+| `ghcr.io/gigaionllc/nanophp:latest` | current master |
+| `ghcr.io/gigaionllc/nanophp:1`, `:1.0`, `:1.0.0` | semver pins (released versions) |
 | `ghcr.io/gigaionllc/nanophp:sha-<commit>` | immutable, per commit |
 
 Both `linux/amd64` and `linux/arm64` are published.
@@ -202,8 +201,8 @@ The build fails if any lint or verification check fails.
 
 ## Publishing (maintainers)
 
-`.github/workflows/docker.yml` publishes on every push to master (`:edge`)
-and on every `v*` tag (`:latest` + semver tags), for amd64 and arm64. The
+`.github/workflows/docker.yml` publishes on every push to master (`:latest`)
+and on every `v*` tag (semver tags), for amd64 and arm64. The
 GHCR package is created automatically on the first publish and linked to
 the repository via the `org.opencontainers.image.source` label. After the
 first publish, set the package visibility to **public** once under

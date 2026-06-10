@@ -76,7 +76,7 @@ Docker: the `Dockerfile` builds `ghcr.io/gigaionllc/nanophp` (php:8.5-cli-alpine
 + bcmath, unprivileged user, entrypoint = the CLI) and runs the lint and all
 three suites during the build — a build failure means broken code, by design.
 `.github/workflows/docker.yml` publishes amd64+arm64 images on master pushes
-(`:edge`) and `v*` tags (`:latest` + semver). Usage docs: docs/DOCKER.md.
+(`:latest`) and `v*` tags (semver pins). Usage docs: docs/DOCKER.md.
 Keep the Dockerfile's verification step in sync with the suite list too.
 
 ## Architecture in one paragraph
