@@ -47,7 +47,7 @@ use GigaionLLC\NanoPHP\NanoRPC;
 use GigaionLLC\NanoPHP\NanoTool;
 use GigaionLLC\NanoPHP\NanoWallet;
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 
 const USAGE = <<<TXT
 Usage:
