@@ -10,9 +10,17 @@ repository, so it stays maintainable long term without relying on external
 parties.
 
 This is the **[GigaionLLC fork](https://github.com/GigaionLLC/NanoPHP)** of the
-archived [MikeRow/NanoPHP](https://github.com/MikeRow/NanoPHP), modernized for
-PHP 8.1–8.5 and extended with the wallet capabilities of the
+archived [MikeRow/NanoPHP](https://github.com/MikeRow/NanoPHP). It is a **heavy
+rewrite** rather than a light patch: the cryptography, wallet, RPC/WebSocket
+transports, tests, and documentation have been substantially rewritten and
+modernized for PHP 8.1–8.5, and extended with the wallet capabilities of the
 [atto](https://github.com/codesoap/atto) Go client.
+
+> **⚠️ Test before you trust it.** Because this is a heavy rewrite — and because
+> it moves real money — you are strongly encouraged to run the bundled test
+> suites and validate the library against your own setup before using it in any
+> kind of production environment. Start on a throwaway seed with small amounts.
+> See [Verify the installation](#verify-the-installation).
 
 > **AI-enhanced project.** NanoPHP is developed, modernized, and maintained
 > with extensive use of AI coding agents. The cryptography rewrite, the native
