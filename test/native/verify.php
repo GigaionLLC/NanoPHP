@@ -34,6 +34,20 @@ function check(string $name, $actual, $expected = true): void
     }
 }
 
+// Assert that $fn throws (used to lock in input-validation behavior)
+function checkThrows(string $name, callable $fn): void
+{
+    global $failures;
+
+    try {
+        $fn();
+        $failures++;
+        echo "FAIL  $name (expected an exception, none thrown)\n";
+    } catch (\Throwable $e) {
+        echo "PASS  $name\n";
+    }
+}
+
 // *
 // *  BLAKE2b (RFC 7693)
 // *
@@ -208,6 +222,30 @@ try {
 check('den2raw', NanoTool::den2raw('1.5', 'NANO'), '1500000000000000000000000000000');
 check('raw2den', NanoTool::raw2den('1500000000000000000000000000000', 'NANO'), '1.5');
 check('den2den', NanoTool::den2den('1', 'NANO', 'knano'), '1000');
+
+// Regression: leading/trailing dot and validation. ".5" once produced
+// 5 NANO instead of 0.5 (a 10x overspend through the send path).
+check('den2raw leading dot .5',  NanoTool::den2raw('.5', 'NANO'),  '500000000000000000000000000000');
+check('den2raw 0.5 == .5',       NanoTool::den2raw('0.5', 'NANO'), '500000000000000000000000000000');
+check('den2raw trailing dot 5.', NanoTool::den2raw('5.', 'NANO'),  '5000000000000000000000000000000');
+check('den2raw 0',               NanoTool::den2raw('0', 'NANO'),   '0');
+check('den2raw min raw',         NanoTool::den2raw('0.000000000000000000000000000001', 'NANO'), '1');
+checkThrows('den2raw rejects letters',     fn() => NanoTool::den2raw('abc', 'NANO'));
+checkThrows('den2raw rejects negative',    fn() => NanoTool::den2raw('-1', 'NANO'));
+checkThrows('den2raw rejects sci notation',fn() => NanoTool::den2raw('1e3', 'NANO'));
+checkThrows('den2raw rejects double dot',  fn() => NanoTool::den2raw('1.2.3', 'NANO'));
+checkThrows('den2raw rejects empty',       fn() => NanoTool::den2raw('', 'NANO'));
+checkThrows('den2raw rejects lone dot',    fn() => NanoTool::den2raw('.', 'NANO'));
+checkThrows('den2raw rejects sub-raw',     fn() => NanoTool::den2raw('0.0000000000000000000000000000001', 'NANO'));
+check('raw2den min raw', NanoTool::raw2den('1', 'NANO'), '0.000000000000000000000000000001');
+check('raw2den 0',       NanoTool::raw2den('0', 'NANO'), '0');
+checkThrows('raw2den rejects decimal', fn() => NanoTool::raw2den('12.5', 'NANO'));
+checkThrows('raw2den rejects letters', fn() => NanoTool::raw2den('abc', 'NANO'));
+checkThrows('raw2den rejects negative',fn() => NanoTool::raw2den('-5', 'NANO'));
+check('den2raw/raw2den roundtrip max',
+    NanoTool::den2raw(NanoTool::raw2den('340282366920938463463374607431768211455', 'NANO'), 'NANO'),
+    '340282366920938463463374607431768211455'
+);
 
 check('hex2dec', NanoTool::hex2dec('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'), '340282366920938463463374607431768211455');
 check('dec2hex', NanoTool::dec2hex('340282366920938463463374607431768211455', 16), 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');

@@ -131,26 +131,31 @@ class NanoTool
             throw new NanoToolException("Invalid denomination: $denomination");
         }
 
-        $raw_to_denomination = self::RAWS[$denomination];
+        $amount = (string) $amount;
 
-        if ($amount == 0) {
-            return '0';
+        // Strict, non-negative decimal: "5", "5.", ".5", "5.5" — but never
+        // empty, "-1", "1e3", "1.2.3" or other garbage. A money path must
+        // reject ambiguous input rather than guess.
+        if (!preg_match('/^(?:\d+\.?\d*|\.\d+)$/', $amount)) {
+            throw new NanoToolException("Invalid amount: $amount");
         }
 
-        if (strpos($amount, '.')) {
-            $dot_pos = strpos($amount, '.');
-            $number_len = strlen($amount) - 1;
-            $raw_to_denomination = substr($raw_to_denomination, 0, -($number_len - $dot_pos));
+        // Number of raw per unit = digits after the leading 1 of the constant
+        $decimals = strlen(self::RAWS[$denomination]) - 1;
+
+        $dot  = strpos($amount, '.');
+        $int  = $dot === false ? $amount : substr($amount, 0, $dot);
+        $frac = $dot === false ? ''      : substr($amount, $dot + 1);
+
+        if (strlen($frac) > $decimals) {
+            throw new NanoToolException("Amount $amount has more precision than $denomination allows (sub-raw)");
         }
 
-        $amount = str_replace('.', '', $amount) . str_replace('1', '', $raw_to_denomination);
+        // raw = integer part shifted left by $decimals, plus the fractional
+        // part right-padded to $decimals — all exact string math, no floats
+        $raw = ltrim($int . str_pad($frac, $decimals, '0', STR_PAD_RIGHT), '0');
 
-        // Remove useless zeros from left
-        while (substr($amount, 0, 1) == '0') {
-            $amount = substr($amount, 1);
-        }
-
-        return $amount;
+        return $raw === '' ? '0' : $raw;
     }
 
 
@@ -164,39 +169,25 @@ class NanoTool
             throw new NanoToolException("Invalid denomination: $denomination");
         }
 
-        $raw_to_denomination = self::RAWS[$denomination];
+        // Raw is an integer number of the smallest unit; anything else
+        // (decimal point, sign, letters) is invalid input
+        if (!ctype_digit($amount)) {
+            throw new NanoToolException("Invalid raw amount: $amount");
+        }
 
-        if ($amount == '0') {
+        $amount = ltrim($amount, '0');
+        if ($amount === '') {
             return '0';
         }
 
-        $prefix_lenght = 39 - strlen($amount);
+        $decimals = strlen(self::RAWS[$denomination]) - 1;
 
-        $i = 0;
+        // Guarantee at least one integer digit, then split off the fraction
+        $amount = str_pad($amount, $decimals + 1, '0', STR_PAD_LEFT);
+        $int    = substr($amount, 0, strlen($amount) - $decimals);
+        $frac   = rtrim(substr($amount, strlen($amount) - $decimals), '0');
 
-        while ($i < $prefix_lenght) {
-            $amount = '0' . $amount;
-            $i++;
-        }
-
-        $amount = substr_replace($amount, '.', -(strlen($raw_to_denomination)-1), 0);
-
-        // Remove useless zeroes from left
-        while (substr($amount, 0, 1) == '0' && substr($amount, 1, 1) != '.') {
-            $amount = substr($amount, 1);
-        }
-
-        // Remove useless decimals
-        while (substr($amount, -1) == '0') {
-            $amount = substr($amount, 0, -1);
-        }
-
-        // Remove dot if all decimals are zeros
-        if (substr($amount, -1) == '.') {
-            $amount = substr($amount, 0, -1);
-        }
-
-        return $amount;
+        return $frac === '' ? $int : "$int.$frac";
     }
 
 

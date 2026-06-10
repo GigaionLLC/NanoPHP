@@ -77,3 +77,30 @@ jobs:
             nano_*) echo "address derivation OK: $ADDRESS" ;;
             *) echo "unexpected address: $ADDRESS"; exit 1 ;;
           esac
+
+  static-analysis:
+    name: Static analysis (PHPStan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: bcmath
+          coverage: none
+
+      # PHPStan is dev-only tooling: downloaded as a pinned PHAR so the
+      # library itself stays Composer-free. It catches type-level bugs
+      # (undefined symbols, impossible conditions, bad argument types);
+      # the behavioral test suites above catch logic bugs like the
+      # currency-precision and input-validation issues.
+      - name: Download PHPStan
+        run: |
+          curl -sSL --fail -o phpstan.phar \
+            https://github.com/phpstan/phpstan/releases/download/2.2.2/phpstan.phar
+          php phpstan.phar --version
+
+      - name: Analyse maintained sources
+        run: php phpstan.phar analyse --no-progress --memory-limit=512M

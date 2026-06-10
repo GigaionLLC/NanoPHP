@@ -108,6 +108,27 @@ stopEchoServer($server);
 
 
 // *
+// *  DoS guard: a peer reply larger than max_message_size is rejected
+// *  rather than allocated. The echo server reflects our oversized
+// *  payload back; the tiny cap must make receive() throw.
+// *
+
+$port++;
+$server = spawnEchoServer($port);
+
+$guarded  = new WebSocketClient("ws://127.0.0.1:$port/", ['timeout' => 5, 'max_message_size' => 1024]);
+$guarded->send(str_repeat('x', 4096));
+$rejected = false;
+try {
+    $guarded->receive();
+} catch (\GigaionLLC\NanoPHP\Util\WebSocketClientException $e) {
+    $rejected = strpos($e->getMessage(), 'max_message_size') !== false;
+}
+check('oversized incoming message rejected', $rejected);
+stopEchoServer($server);
+
+
+// *
 // *  NanoWS wrapper (Nano node subscription protocol shape)
 // *
 

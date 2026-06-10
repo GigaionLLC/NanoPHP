@@ -69,8 +69,13 @@ There is no PHPUnit; tests are plain scripts using the `check()` helper.
 CI (`.github/workflows/ci.yml`) runs the lint, all three suites, and a CLI
 smoke test on every push to master and every pull request, across PHP 8.1
 (the version floor), 8.4, and 8.5 with only the bcmath extension installed —
-which doubles as proof of the zero-dependency claim. Keep the workflow's
-suite list in sync when adding test scripts.
+which doubles as proof of the zero-dependency claim. A separate job runs
+PHPStan (level 5, config `phpstan.neon`, pinned PHAR — no Composer) over the
+maintained core classes. Keep the workflow's suite list in sync when adding
+test scripts. `php -l` and PHPStan only catch syntax and type-level issues;
+**logic bugs (currency precision, input validation, allocation limits) are
+guarded by behavioral assertions in `test/native/verify.php` — add a
+regression check there for every such bug fixed.**
 
 Docker: the `Dockerfile` builds `ghcr.io/gigaionllc/nanophp` (php:8.5-cli-alpine
 + bcmath, unprivileged user, entrypoint = the CLI) and runs the lint and all

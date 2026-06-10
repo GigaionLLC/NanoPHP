@@ -21,14 +21,16 @@ class WebSocketClient
     private $socket;
     private float $timeout;
     private int $fragmentSize;
+    private int $maxMessageSize;
     private bool $closed = false;
 
     /**
      * @param string $url     ws://host:port/path or wss://host:port/path
      * @param array  $options timeout (seconds, default 60), fragment_size
-     *                        (outgoing, default 4096), headers (list of
-     *                        extra handshake header lines), context
-     *                        (stream context options array, e.g. ssl)
+     *                        (outgoing, default 4096), max_message_size
+     *                        (incoming cap in bytes, default 16 MiB),
+     *                        headers (list of extra handshake header lines),
+     *                        context (stream context options array, e.g. ssl)
      */
     public function __construct(string $url, array $options = [])
     {
@@ -48,8 +50,9 @@ class WebSocketClient
         $port   = $parts['port'] ?? ($secure ? 443 : 80);
         $path   = ($parts['path'] ?? '/') . (isset($parts['query']) ? '?' . $parts['query'] : '');
 
-        $this->timeout      = (float) ($options['timeout'] ?? 60);
-        $this->fragmentSize = (int) ($options['fragment_size'] ?? 4096);
+        $this->timeout        = (float) ($options['timeout'] ?? 60);
+        $this->fragmentSize   = (int) ($options['fragment_size'] ?? 4096);
+        $this->maxMessageSize = (int) ($options['max_message_size'] ?? 16 * 1024 * 1024);
 
         $context = stream_context_create($options['context'] ?? []);
         $remote  = ($secure ? 'ssl://' : 'tcp://') . $host . ':' . $port;
@@ -160,6 +163,12 @@ class WebSocketClient
                 case 0x2: // binary
                 case 0x0: // continuation
                     $message .= $payload;
+                    if (strlen($message) > $this->maxMessageSize) {
+                        $this->close(1009); // message too big
+                        throw new WebSocketClientException(
+                            "Incoming message exceeds max_message_size ({$this->maxMessageSize} bytes)"
+                        );
+                    }
                     if ($fin) {
                         return $message;
                     }
@@ -257,6 +266,15 @@ class WebSocketClient
             $length = unpack('n', $this->readStrict(2))[1];
         } elseif ($length == 127) {
             $length = unpack('J', $this->readStrict(8))[1];
+        }
+
+        // Refuse to allocate for an oversized (or, on the 64-bit wire,
+        // negative-when-wrapped) frame a malicious peer might claim
+        if ($length < 0 || $length > $this->maxMessageSize) {
+            $this->close(1009); // message too big
+            throw new WebSocketClientException(
+                "Incoming frame length $length exceeds max_message_size ({$this->maxMessageSize} bytes)"
+            );
         }
 
         $mask = $masked ? $this->readStrict(4) : '';

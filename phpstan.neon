@@ -1,0 +1,33 @@
+# Static analysis for the maintained core classes. Generated FlatBuffers
+# models (src/NanoAPI) and the thin node-binary wrappers (NanoCLI, NanoIPC)
+# are excluded — they are not where logic bugs hide.
+#
+# Run locally (no Composer needed):
+#   curl -sL -o phpstan.phar https://github.com/phpstan/phpstan/releases/latest/download/phpstan.phar
+#   php phpstan.phar analyse
+parameters:
+    level: 5
+    paths:
+        - src/NanoTool.php
+        - src/NanoBlock.php
+        - src/NanoRPC.php
+        - src/NanoRPCExt.php
+        - src/NanoWallet.php
+        - src/Crypto
+        - src/Util/WebSocketClient.php
+    # Don't treat PHPDoc-derived types as certain: the int range checks in
+    # validation guards (e.g. hashHexs size) are deliberate defensive code,
+    # not dead branches.
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # NanoRPC dispatches node RPC actions (wallet_info, send, ...) through
+        # __call; the action names are dynamic, so they cannot be statically
+        # resolved. This is the intended design of the client.
+        -
+            identifier: method.notFound
+            path: src/NanoRPCExt.php
+        # The native-streams fallback reads $http_response_header, which PHP
+        # only defines after a request; the ?? guard is intentional.
+        -
+            message: '#Variable \$http_response_header on left side of \?\? always exists#'
+            path: src/NanoRPC.php

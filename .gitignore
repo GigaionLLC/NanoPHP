@@ -2,6 +2,9 @@ composer.lock
 .project
 /vendor
 
+# Static-analysis tool, downloaded on demand (not vendored)
+phpstan.phar
+
 # Never commit wallet seeds (e.g. from the README/CLI examples:
 # php nanophp new | tee seed.txt)
 seed.txt
