@@ -72,6 +72,13 @@ smoke test on every push to master and every pull request, across PHP 8.1
 which doubles as proof of the zero-dependency claim. Keep the workflow's
 suite list in sync when adding test scripts.
 
+Docker: the `Dockerfile` builds `ghcr.io/gigaionllc/nanophp` (php:8.5-cli-alpine
++ bcmath, unprivileged user, entrypoint = the CLI) and runs the lint and all
+three suites during the build — a build failure means broken code, by design.
+`.github/workflows/docker.yml` publishes amd64+arm64 images on master pushes
+(`:edge`) and `v*` tags (`:latest` + semver). Usage docs: docs/DOCKER.md.
+Keep the Dockerfile's verification step in sync with the suite list too.
+
 ## Architecture in one paragraph
 
 `Crypto\Blake2b` and `Crypto\Ed25519Blake2b` are the foundation. `NanoTool`

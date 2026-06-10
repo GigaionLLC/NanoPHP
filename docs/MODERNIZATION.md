@@ -83,6 +83,9 @@ JSON over IPC). Everything else in the repository is self-contained.
   later commands; probing happens only when that command is run explicitly.
 - `AGENT.md` — agent/contributor guide following the AGENT.md standard;
   `CLAUDE.md` is now a pointer to it.
+- `Dockerfile` + `.github/workflows/docker.yml` — prebuilt
+  `ghcr.io/gigaionllc/nanophp` images (amd64/arm64); the verification
+  suites run during the image build. See [DOCKER.md](DOCKER.md).
 - `autoload.php` — standalone PSR-4 autoloader; Composer no longer needed.
 - `NanoTool::hex2dec`/`dec2hex` — exact 128-bit hex↔decimal conversion.
 - `test/native/verify.php` — 43-check offline suite: RFC 7693 vectors, the

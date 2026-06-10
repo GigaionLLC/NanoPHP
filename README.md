@@ -65,6 +65,19 @@ Composer also works, but is never required:
 composer require gigaionllc/nanophp
 ```
 
+Or skip installing PHP entirely with the prebuilt Docker image — PHP 8.5,
+bcmath, library and CLI included, with the full verification suite run at
+image build time:
+
+```sh
+docker run --rm ghcr.io/gigaionllc/nanophp new > seed.txt
+docker run --rm -i ghcr.io/gigaionllc/nanophp address < seed.txt
+```
+
+See [docs/DOCKER.md](docs/DOCKER.md) for compose usage, vendoring the
+library into your own images with `COPY --from`, and a complete
+nginx + PHP-FPM example.
+
 ---
 
 ## Command line wallet
@@ -360,6 +373,7 @@ php test/native/websocket.php   # bundled WebSocket client (7 checks)
 - [docs/MODERNIZATION.md](docs/MODERNIZATION.md) — all changes and fixes since the archived upstream
 - [docs/CRYPTO.md](docs/CRYPTO.md) — the crypto implementations and their verification
 - [docs/WALLET.md](docs/WALLET.md) — NanoWallet guide and the atto feature mapping
+- [docs/DOCKER.md](docs/DOCKER.md) — prebuilt images: docker run, compose, and nginx/PHP-FPM integration
 - [AGENT.md](AGENT.md) — contributor / AI-agent guide and project constraints (the [AGENT.md](https://agent.md) standard; [CLAUDE.md](CLAUDE.md) points here)
 
 ---
