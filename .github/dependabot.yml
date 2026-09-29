@@ -1,0 +1,9 @@
+# Weekly PRs for outdated GitHub Actions. The library itself has no
+# dependencies; the Docker base (php:8.5-cli-alpine) is a floating tag
+# refreshed by the weekly scheduled image rebuild.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

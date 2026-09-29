@@ -9,7 +9,7 @@
 #                   node that lies about account state
 #   websocket.php - bundled RFC 6455 client against a local echo server
 #
-# Runs on the oldest supported PHP (8.1) and current PHP to guard the
+# Runs on the oldest supported PHP (8.2) and current PHP to guard the
 # version floor declared in composer.json.
 
 name: CI
@@ -34,10 +34,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.1', '8.4', '8.5']
+        php: ['8.2', '8.4', '8.5']
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
@@ -82,7 +82,7 @@ jobs:
     name: Static analysis (PHPStan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -99,7 +99,7 @@ jobs:
       - name: Download PHPStan
         run: |
           curl -sSL --fail -o phpstan.phar \
-            https://github.com/phpstan/phpstan/releases/download/2.2.2/phpstan.phar
+            https://github.com/phpstan/phpstan/releases/download/2.2.16/phpstan.phar
           php phpstan.phar --version
 
       - name: Analyse maintained sources

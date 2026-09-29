@@ -23,7 +23,7 @@ here), `upstream` → MikeRow/NanoPHP (archived, reference only).
 
 ## Hard constraints — read before changing dependencies
 
-The minimum supported runtime is a **bare PHP build**: 64-bit PHP 8.1+ with
+The minimum supported runtime is a **bare PHP build**: 64-bit PHP 8.2+ with
 **only `bcmath`** beyond the always-on extensions — no curl, gmp, sodium,
 openssl, mbstring, sockets, or blake2 in `hash_algos()`, and **no Composer**.
 The library must keep working on that floor (a given dev machine may have more
@@ -67,7 +67,7 @@ There is no PHPUnit; tests are plain scripts using the `check()` helper.
 `test/NanoTool/*.php` are runnable usage examples, not assertions.
 
 CI (`.github/workflows/ci.yml`) runs the lint, all three suites, and a CLI
-smoke test on every push to master and every pull request, across PHP 8.1
+smoke test on every push to master and every pull request, across PHP 8.2
 (the version floor), 8.4, and 8.5 with only the bcmath extension installed —
 which doubles as proof of the zero-dependency claim. A separate job runs
 PHPStan (level 5, config `phpstan.neon`, pinned PHAR — no Composer) over the

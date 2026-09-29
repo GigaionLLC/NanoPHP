@@ -6,6 +6,8 @@
 #   - pushing to master publishes :latest
 #   - pushing a version tag (v1.2.3) publishes :1.2.3, :1.2 and :1
 #   - every publish also gets an immutable :sha-<commit> tag
+#   - a weekly scheduled rebuild refreshes :latest with the current
+#     php:8.5-cli-alpine base (PHP and Alpine security fixes)
 #
 # The Dockerfile runs the full offline verification suite during the build,
 # so a published image is a verified image — on both architectures.
@@ -19,6 +21,8 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+  schedule:
+    - cron: '17 9 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -36,16 +40,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up QEMU (for arm64)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -53,7 +57,7 @@ jobs:
 
       - name: Image metadata (tags and labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -66,7 +70,7 @@ jobs:
             latest=false
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -75,3 +79,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # GitHub disables scheduled workflows after 60 days without repository
+  # activity; the weekly run re-enables its own workflow to reset that
+  # timer. Kept in its own job so only this step holds actions: write.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep weekly schedule alive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/docker.yml/enable"
