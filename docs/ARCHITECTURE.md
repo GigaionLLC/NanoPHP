@@ -36,7 +36,9 @@ How the pieces of NanoPHP fit together, bottom-up.
 ```
 
 Side classes not in the main flow: `NanoCLI` (wraps the `nano_node` CLI
-binary), `NanoIPC` (node IPC over `stream_socket_client`, optional legacy
+binary; method/option names are validated and every value is shell-escaped,
+but arguments are visible in the process list, so never pass seeds, private
+keys or wallet passwords through it), `NanoIPC` (node IPC over `stream_socket_client`, optional legacy
 FlatBuffers preprocessing), `NanoWS` (node WebSocket subscriptions, built on
 the bundled `Util\WebSocketClient`, an RFC 6455 client over native streams),
 `NanoAPI/*` (generated FlatBuffers message models used by NanoIPC). The
@@ -75,7 +77,7 @@ All-static toolbox translating raw crypto into Nano concepts:
 | Blocks | `hashHexs` (BLAKE2b over concatenated hex fields), `sign`, `validSign` |
 | Work | `work` (CPU generation), `validWork`, `mult2diff`, `diff2mult` |
 | Units | `den2raw`, `raw2den`, `den2den`, `hex2dec`, `dec2hex` (bcmath, exact at 128 bits) |
-| Mnemonics | `mnem2hex`, `hex2mnem` (BIP39 with checksum validation), `mnem2mseed`, `mseed2keys` (BIP44 `m/44'/165'/index'`, SLIP-0010 ed25519) |
+| Mnemonics | `mnem2hex`, `hex2mnem` (BIP39 with checksum validation), `mnem2mseed` (checksum check opt-in via its third argument), `mseed2keys` (BIP44 `m/44'/165'/index'`, SLIP-0010 ed25519) |
 
 The BIP39 English wordlist is bundled at `src/Util/bip39-english.txt`.
 

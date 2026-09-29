@@ -50,7 +50,7 @@ class Blake2b
     private int $outLen;
     private bool $finalized = false;
 
-    public function __construct(int $outLen = 64, string $key = '')
+    public function __construct(int $outLen = 64, #[\SensitiveParameter] string $key = '')
     {
         if (PHP_INT_SIZE < 8) {
             throw new Blake2bException('Blake2b requires 64-bit PHP');
@@ -73,7 +73,7 @@ class Blake2b
         }
     }
 
-    public function update(string $data): static
+    public function update(#[\SensitiveParameter] string $data): static
     {
         if ($this->finalized) {
             throw new Blake2bException('Cannot update a finalized hash');
@@ -112,12 +112,12 @@ class Blake2b
         return substr(pack('V16', ...$words), 0, $this->outLen);
     }
 
-    public static function hash(string $data, int $outLen = 64, string $key = ''): string
+    public static function hash(#[\SensitiveParameter] string $data, int $outLen = 64, #[\SensitiveParameter] string $key = ''): string
     {
         return (new self($outLen, $key))->update($data)->digest();
     }
 
-    public static function hashHex(string $data, int $outLen = 64, string $key = ''): string
+    public static function hashHex(#[\SensitiveParameter] string $data, int $outLen = 64, #[\SensitiveParameter] string $key = ''): string
     {
         return strtoupper(bin2hex(self::hash($data, $outLen, $key)));
     }

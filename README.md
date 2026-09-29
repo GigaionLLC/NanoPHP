@@ -42,6 +42,14 @@ Same guarantees as atto:
   operator cannot manipulate the wallet by, for example, reporting wrong
   balances.
 
+Beyond atto:
+
+- **Signing is not constant-time.** The pure-PHP (bcmath) Ed25519 uses a
+  fixed-length ladder for secret scalars, but bcmath arithmetic still takes
+  value-dependent time. Do not run it where untrusted parties can trigger and
+  precisely time many signatures (for example co-tenant hosts or high-rate
+  signing APIs); see [docs/CRYPTO.md](docs/CRYPTO.md#security-notes).
+
 ---
 
 ## Requirements
@@ -140,6 +148,18 @@ nano_3mkgs5khhaw36gdik1wj57q4nctaajfttmw1ngr4smn49m39fz5ux7ofsrya
 to only do that part). `-a` selects the account index, `-y` skips the send
 confirmation, `representative NEW_REP` changes the representative.
 
+**Protect the seed file:** whoever can read it controls the funds. With the
+usual umask of 022, `> seed.txt` and `tee seed.txt` create it readable by
+every local user (mode 0644). Create it private instead, or fix it right
+away:
+
+```sh
+(umask 077; php nanophp new > seed.txt)   # created as 0600
+chmod 600 seed.txt                        # for an existing file
+```
+
+On Windows, keep it inside your user profile rather than a shared folder.
+
 ### PowerShell
 
 PowerShell has no `<` input-redirection operator, so pipe the seed in with
@@ -199,8 +219,11 @@ To also export it into your current shell session:
 If a node is unreachable it prints `no (reason)` and moves to the next one.
 Later commands simply read the saved choice from `~/.nanophp-node` — they
 never probe. Node selection precedence is: the `NANOPHP_NODE` environment
-variable, then the saved node, then localhost. So you can always override
-per-shell:
+variable, then the saved node, then localhost. The saved file is skipped
+when there is no home directory (`HOME`/`USERPROFILE` unset, e.g. under
+cron) and, on Linux/macOS, when it isn't owned by you or is writable by
+group/others, because whoever controls it picks the node your wallet
+trusts. So you can always override per-shell:
 
 ```sh
 export NANOPHP_NODE=http://my-node:7076      # POSIX shells
@@ -233,6 +256,13 @@ $rpc = new NanoRPC('https', 'my-node', 443, null, [
     'headers' => ['Authorization: Basic ' . base64_encode('rpcuser:s3cret')]
 ]);
 ```
+
+Basic credentials travel in cleartext over plain `http://`, so `nanophp`
+prints a warning when they are sent to a host other than localhost; use
+https for remote nodes. `NanoRPC` does not follow HTTP redirects (Nano RPC
+never needs them). If you opt in with `'follow_location' => true`, it still
+refuses an https-to-http downgrade and drops the `Authorization` header when
+a redirect leads to another host or port.
 
 ---
 

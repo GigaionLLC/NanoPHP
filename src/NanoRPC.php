@@ -65,14 +65,21 @@ class NanoRPC
         $this->url      = $url;
         $this->nanoApi  = 1;
 
-        // Transport options
+        // Transport options. Nano RPC never redirects, so redirects are
+        // not followed unless a caller opts in (follow_location => true);
+        // even then an https -> http downgrade is refused and credentials
+        // (Authorization header) are dropped when the origin changes.
         $this->options =
         [
             'timeout'         => 30,
             'headers'         => [],
-            'follow_location' => true,
+            'follow_location' => false,
             'max_redirects'   => 10,
-            'user_agent'      => 'NanoPHP/NanoRPC'
+            'user_agent'      => 'NanoPHP/NanoRPC',
+            // Largest response body accepted, in bytes (null = unlimited).
+            // Generous for any real RPC answer, but a malicious node can't
+            // exhaust memory with an endless body.
+            'max_response_size' => 64 * 1024 * 1024
         ];
 
         if (is_array($options)) {
@@ -103,10 +110,10 @@ class NanoRPC
     // *  Set Nano API key
     // *
 
-    public function setNanoApiKey(string $nano_api_key)
+    public function setNanoApiKey(#[\SensitiveParameter] string $nano_api_key)
     {
         if (empty($nano_api_key)) {
-            throw new NanoRPCException("Invalid Nano API key: $nano_api_key");
+            throw new NanoRPCException("Invalid Nano API key: empty");
         }
 
         $this->nanoApiKey = (string) $nano_api_key;
@@ -166,47 +173,11 @@ class NanoRPC
 
         // * Perform the HTTP request over native streams (no curl required)
 
-        $headers = "Content-Type: application/json\r\n"
-                 . "Content-Length: " . strlen($request) . "\r\n";
-
-        foreach ($this->options['headers'] as $header) {
-            $headers .= rtrim($header, "\r\n") . "\r\n";
-        }
-
-        $context = stream_context_create([
-            'http' => [
-                'method'           => 'POST',
-                'header'           => $headers,
-                'content'          => $request,
-                'timeout'          => $this->options['timeout'],
-                'user_agent'       => $this->options['user_agent'],
-                'follow_location'  => $this->options['follow_location'] ? 1 : 0,
-                'max_redirects'    => $this->options['max_redirects'],
-                'ignore_errors'    => true
-            ]
-        ]);
-
         $endpoint = "{$this->protocol}://{$this->hostname}:{$this->port}/{$this->url}";
 
-        $this->responseRaw = @file_get_contents($endpoint, false, $context);
-
-        // HTTP status from response headers
-        $this->status = 0;
-        if (function_exists('http_get_last_response_headers')) {
-            $response_headers = http_get_last_response_headers() ?? [];
-        } else {
-            $response_headers = $http_response_header ?? [];
-        }
-        foreach ($response_headers as $header) {
-            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $match)) {
-                $this->status = (int) $match[1];
-            }
-        }
+        [$this->responseRaw, $this->status] = $this->httpPost($endpoint, $request);
 
         if ($this->responseRaw === false) {
-            $last_error  = error_get_last();
-            $this->error = $last_error['message'] ?? "Unable to connect to $endpoint";
-
             return false;
         }
 
@@ -287,5 +258,194 @@ class NanoRPC
         } else {
             return $this->response;
         }
+    }
+
+
+    // *
+    // *  HTTP transport
+    // *
+
+    /**
+     * POST $body to $endpoint, following redirects only when the caller
+     * opted in. Returns [response body or false, HTTP status]; on failure
+     * error is set.
+     *
+     * @return array{0: string|false, 1: int}
+     */
+    private function httpPost(string $endpoint, string $body): array
+    {
+        $method    = 'POST';
+        $headers   = $this->options['headers'];
+        $redirects = 0;
+
+        while (true) {
+            [$raw, $response_headers] = $this->httpRequest($endpoint, $method, $body, $headers);
+
+            // HTTP status (and Location) of this hop
+            $status   = 0;
+            $location = null;
+            foreach ($response_headers as $header) {
+                if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $match)) {
+                    $status   = (int) $match[1];
+                    $location = null;
+                } elseif (stripos($header, 'Location:') === 0) {
+                    $location = trim(substr($header, 9));
+                }
+            }
+
+            if ($raw === false) {
+                $last_error  = error_get_last();
+                $this->error = $last_error['message'] ?? "Unable to connect to $endpoint";
+
+                return [false, $status];
+            }
+
+            $max_size = $this->options['max_response_size'];
+            if ($max_size !== null && strlen($raw) > (int) $max_size) {
+                $this->error = "Response exceeds max_response_size ($max_size bytes)";
+
+                return [false, $status];
+            }
+
+            if (!$this->options['follow_location'] ||
+                !in_array($status, [301, 302, 303, 307, 308], true) ||
+                $location === null || $location === ''
+            ) {
+                return [$raw, $status];
+            }
+
+            if (++$redirects > (int) $this->options['max_redirects']) {
+                $this->error = 'Too many redirects';
+
+                return [false, $status];
+            }
+
+            $next = self::resolveRedirect($endpoint, $location);
+            if ($next === null) {
+                $this->error = 'Invalid redirect location';
+
+                return [false, $status];
+            }
+            if (!self::redirectAllowed($endpoint, $next)) {
+                $this->error = 'Refusing redirect from https to a non-https location';
+
+                return [false, $status];
+            }
+
+            // Never forward credentials to another origin
+            if (self::origin($next) !== self::origin($endpoint)) {
+                $headers = array_values(array_filter($headers, function ($header) {
+                    return stripos(ltrim((string) $header), 'Authorization:') !== 0;
+                }));
+            }
+
+            // Like PHP's own http wrapper: 307/308 repeat the POST,
+            // 301/302/303 continue with a body-less GET
+            if ($status !== 307 && $status !== 308) {
+                $method = 'GET';
+                $body   = '';
+            }
+
+            $endpoint = $next;
+        }
+    }
+
+    /**
+     * One HTTP request without automatic redirects.
+     *
+     * @return array{0: string|false, 1: array} [body or false, response headers]
+     */
+    private function httpRequest(string $endpoint, string $method, string $body, array $extra_headers): array
+    {
+        $headers = '';
+        if ($method === 'POST') {
+            $headers .= "Content-Type: application/json\r\n"
+                      . "Content-Length: " . strlen($body) . "\r\n";
+        }
+
+        foreach ($extra_headers as $header) {
+            $headers .= rtrim($header, "\r\n") . "\r\n";
+        }
+
+        $http = [
+            'method'          => $method,
+            'header'          => $headers,
+            'timeout'         => $this->options['timeout'],
+            'user_agent'      => $this->options['user_agent'],
+            'follow_location' => 0,
+            'ignore_errors'   => true
+        ];
+        if ($method === 'POST') {
+            $http['content'] = $body;
+        }
+
+        $context = stream_context_create(['http' => $http]);
+
+        // Read at most one byte past the cap, so an oversized body is
+        // detected without being buffered in full
+        $max_size = $this->options['max_response_size'];
+        $max_read = $max_size === null ? null : (int) $max_size + 1;
+
+        $raw = @file_get_contents($endpoint, false, $context, 0, $max_read);
+
+        if (function_exists('http_get_last_response_headers')) {
+            return [$raw, http_get_last_response_headers() ?? []];
+        }
+
+        return [$raw, $http_response_header ?? []];
+    }
+
+    /** scheme://host:port of a URL (lowercased), or '' if unparsable */
+    private static function origin(string $url): string
+    {
+        $parts = parse_url($url);
+        if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
+            return '';
+        }
+
+        $scheme = strtolower($parts['scheme']);
+        $port   = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
+
+        return $scheme . '://' . strtolower($parts['host']) . ':' . $port;
+    }
+
+    /** Absolute http(s) URL for a Location value relative to $base, or null */
+    private static function resolveRedirect(string $base, string $location): ?string
+    {
+        if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $location)) {
+            $url = $location;
+        } else {
+            $parts = parse_url($base);
+            if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
+                return null;
+            }
+
+            $authority = $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+
+            if (strpos($location, '//') === 0) {
+                $url = $parts['scheme'] . ':' . $location;
+            } elseif (strpos($location, '/') === 0) {
+                $url = $parts['scheme'] . '://' . $authority . $location;
+            } else {
+                $dir = preg_replace('#/[^/]*$#', '/', $parts['path'] ?? '/');
+                $url = $parts['scheme'] . '://' . $authority . $dir . $location;
+            }
+        }
+
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        if (($scheme !== 'http' && $scheme !== 'https') || parse_url($url, PHP_URL_HOST) === null) {
+            return null;
+        }
+
+        return $url;
+    }
+
+    /** Redirects may never downgrade from https to http */
+    private static function redirectAllowed(string $from, string $to): bool
+    {
+        $from_scheme = strtolower((string) parse_url($from, PHP_URL_SCHEME));
+        $to_scheme   = strtolower((string) parse_url($to, PHP_URL_SCHEME));
+
+        return !($from_scheme === 'https' && $to_scheme !== 'https');
     }
 }

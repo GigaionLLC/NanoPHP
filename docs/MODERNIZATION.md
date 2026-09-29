@@ -49,6 +49,46 @@ JSON over IPC). Everything else in the repository is self-contained.
    failure left `error` unset and returned `null`; now returns `false` with
    `error = 'Invalid JSON response from node'`.
 
+## Security fixes
+
+Findings of the 2026-09 security review (IDs as in that review).
+
+**1.1.0** — `NanoWallet` account verification fails closed: a non-state
+frontier, an epoch link without the pinned epoch signer's signature, or a
+frontier of another account is rejected (C1, M1, M2; a malicious node could
+otherwise make the wallet sign blocks that move funds).
+
+**1.1.1** — hardening; outputs for valid input (keys, addresses, hashes,
+signatures, blocks, CLI output) are byte-identical:
+
+- **NanoCLI shell injection (H1)**: method/option names validated, every
+  value `escapeshellarg`'d. Secrets passed to it still land in argv.
+- **Secrets in errors and dumps (M3)**: no seed/key/mnemonic values in
+  exception messages; `#[\SensitiveParameter]` on secret parameters;
+  `__debugInfo()` on `NanoWallet`/`NanoBlock` omits the private key.
+- **RPC redirects (L1)**: `NanoRPC` no longer follows redirects by default;
+  opting in refuses https→http and drops `Authorization` across origins.
+  `nanophp` warns about Basic auth over plain http to non-loopback hosts.
+- **Saved node file (L2)**: no temp-dir fallback without `HOME`; on POSIX
+  the file must be owned by the user and not group/world-writable.
+- **Signing timing (L3)**: fixed-length, Z-blinded ladder for secret scalars;
+  docs no longer call non-constant-time signing fine for server-side signing
+  services (README "Security model").
+- **Small-order keys (L4)**: `verify` rejects small-order A and R (the
+  identity-key universal forgery).
+- **Amount parsing (L5)**: `den2raw` rejects a trailing newline cleanly;
+  the CLI catches every `Throwable` and prints no stack traces.
+- **`wallet_send`/`wallet_sweep` (L6)**: failed sends reported as errors,
+  correct per-account amounts, random idempotency ids, new `sent` /
+  `shortfall` fields.
+- **DoS bounds (L7)**: RPC `max_response_size` (64 MiB), bounded WebSocket
+  handshake and `frame_timeout` for stalled frames, IPC frame size cap
+  (64 MiB) with looped reads.
+- **Info**: strict comparisons in `NanoWallet` (I1); node-supplied work
+  validated before publishing, new `work_difficulty_*` options (I2); CLI
+  strips control characters from node text (I3); opt-in checksum check for
+  `mnem2mseed` (I4); docs create seed files with `umask 077` (I6).
+
 ## PHP 8.5 compatibility
 
 - Implicit nullable parameters (`string $x = null`) → explicit `?string`

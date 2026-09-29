@@ -15,9 +15,11 @@ class Ed25519Blake2bException extends Exception{}
  * hash swapped for BLAKE2b-512, built on bcmath big integers so it runs
  * on a bare PHP build (no gmp/sodium/openssl required).
  *
- * Note: this implementation is not constant-time. Like the pure-PHP
- * libraries it replaces, it is intended for server-side use where
- * timing side channels are not part of the threat model.
+ * Note: this implementation is NOT constant-time. Secret scalars go
+ * through a fixed-length ladder (no bit-length or Hamming-weight
+ * dependent loop), but bcmath arithmetic still takes value-dependent
+ * time. Do not use it where untrusted parties can trigger and precisely
+ * time many signatures (co-located tenants, high-rate signing APIs).
  */
 class Ed25519Blake2b
 {
@@ -55,7 +57,7 @@ class Ed25519Blake2b
      * Derive the public key from a 32-byte private key (Nano style:
      * the private key is hashed with BLAKE2b-512, then clamped).
      */
-    public static function publicKey(string $privateKey): string
+    public static function publicKey(#[\SensitiveParameter] string $privateKey): string
     {
         if (strlen($privateKey) != 32) {
             throw new Ed25519Blake2bException('Private key must be 32 bytes');
@@ -64,13 +66,13 @@ class Ed25519Blake2b
         $h = Blake2b::hash($privateKey, 64);
         $a = self::clamp(substr($h, 0, 32));
 
-        return self::encodePoint(self::scalarMultBase($a));
+        return self::encodePoint(self::scalarMultBase($a, true));
     }
 
     /**
      * Sign a message. Returns the 64-byte signature (R || S).
      */
-    public static function sign(string $message, string $privateKey): string
+    public static function sign(string $message, #[\SensitiveParameter] string $privateKey): string
     {
         if (strlen($privateKey) != 32) {
             throw new Ed25519Blake2bException('Private key must be 32 bytes');
@@ -78,10 +80,10 @@ class Ed25519Blake2b
 
         $h = Blake2b::hash($privateKey, 64);
         $a = self::clamp(substr($h, 0, 32));
-        $A = self::encodePoint(self::scalarMultBase($a));
+        $A = self::encodePoint(self::scalarMultBase($a, true));
 
         $r = bcmod(self::bytesToNum(Blake2b::hash(substr($h, 32, 32) . $message, 64)), self::L);
-        $R = self::encodePoint(self::scalarMultBase($r));
+        $R = self::encodePoint(self::scalarMultBase($r, true));
 
         $k = bcmod(self::bytesToNum(Blake2b::hash($R . $A . $message, 64)), self::L);
         $S = bcmod(bcadd($r, bcmul($k, $a)), self::L);
@@ -91,6 +93,10 @@ class Ed25519Blake2b
 
     /**
      * Verify a 64-byte signature against a message and 32-byte public key.
+     *
+     * Public keys and R values of small order (the 8 torsion points, e.g.
+     * the identity) are rejected: with them, S = 0 "signatures" verify for
+     * any message. No real key is ever of small order.
      */
     public static function verify(string $message, string $signature, string $publicKey): bool
     {
@@ -99,13 +105,13 @@ class Ed25519Blake2b
         }
 
         $A = self::decodePoint($publicKey);
-        if ($A === null) {
+        if ($A === null || self::isSmallOrder($A)) {
             return false;
         }
 
         $Renc = substr($signature, 0, 32);
         $R = self::decodePoint($Renc);
-        if ($R === null) {
+        if ($R === null || self::isSmallOrder($R)) {
             return false;
         }
 
@@ -197,6 +203,16 @@ class Ed25519Blake2b
         ];
     }
 
+    /** True if 8*P is the identity, i.e. P is one of the 8 small-order points */
+    private static function isSmallOrder(array $p): bool
+    {
+        $q = self::pointDouble(self::pointDouble(self::pointDouble($p)));
+
+        // Identity in projective coordinates: X = 0 and Y = Z
+        return bccomp(self::modp($q[0]), '0') === 0 &&
+               bccomp(self::modp(bcsub($q[1], $q[2])), '0') === 0;
+    }
+
     /** Identity element */
     private static function pointZero(): array
     {
@@ -206,13 +222,36 @@ class Ed25519Blake2b
     /**
      * Scalar multiplication k*P, double-and-add (MSB first).
      * $k is a decimal string scalar.
+     *
+     * With $secret = true (private scalars: key derivation and signing
+     * nonces) the ladder runs a fixed 256 iterations and computes the
+     * addition every time, selecting the result, so the number and kind of
+     * point operations no longer depend on the scalar's bit length or
+     * Hamming weight. The result is identical. bcmath's own value-dependent
+     * timing remains, so this is still not a constant-time implementation.
+     * Public scalars (verification) use the faster variable-length loop.
      */
-    private static function scalarMult(string $k, array $p): array
+    private static function scalarMult(#[\SensitiveParameter] string $k, array $p, bool $secret = false): array
     {
-        $bits = self::numToBits($k);
         $q = self::pointZero();
 
-        foreach ($bits as $bit) {
+        if ($secret) {
+            // Start from the identity with a random projective Z, so the
+            // leading zero bits don't run on cheap small numbers (and the
+            // intermediate values are blinded); encodePoint normalizes Z away
+            $z = bcadd(bcmod(self::bytesToNum(random_bytes(32)), bcsub(self::P, '1')), '1');
+            $q = ['0', $z, $z, '0'];
+
+            foreach (self::numToBits256($k) as $bit) {
+                $q   = self::pointDouble($q);
+                $sum = self::pointAdd($q, $p);
+                $q   = [$q, $sum][$bit];
+            }
+
+            return $q;
+        }
+
+        foreach (self::numToBits($k) as $bit) {
             $q = self::pointDouble($q);
             if ($bit) {
                 $q = self::pointAdd($q, $p);
@@ -222,9 +261,9 @@ class Ed25519Blake2b
         return $q;
     }
 
-    private static function scalarMultBase(string $k): array
+    private static function scalarMultBase(#[\SensitiveParameter] string $k, bool $secret = false): array
     {
-        return self::scalarMult($k, [self::BX, self::BY, '1', self::mulmod(self::BX, self::BY)]);
+        return self::scalarMult($k, [self::BX, self::BY, '1', self::mulmod(self::BX, self::BY)], $secret);
     }
 
 
@@ -292,7 +331,7 @@ class Ed25519Blake2b
     // *
 
     /** 32-byte little-endian to decimal string */
-    private static function bytesToNum(string $bytes): string
+    private static function bytesToNum(#[\SensitiveParameter] string $bytes): string
     {
         $hex = bin2hex(strrev($bytes));
         $num = '0';
@@ -305,7 +344,7 @@ class Ed25519Blake2b
     }
 
     /** Decimal string to fixed-size little-endian bytes */
-    private static function numToBytes(string $num, int $size): string
+    private static function numToBytes(#[\SensitiveParameter] string $num, int $size): string
     {
         $bytes = '';
         for ($i = 0; $i < $size; $i++) {
@@ -319,7 +358,7 @@ class Ed25519Blake2b
     }
 
     /** Decimal string to bit array, MSB first */
-    private static function numToBits(string $num): array
+    private static function numToBits(#[\SensitiveParameter] string $num): array
     {
         $bits = [];
         while (bccomp($num, '0') > 0) {
@@ -329,8 +368,27 @@ class Ed25519Blake2b
         return array_reverse($bits);
     }
 
+    /**
+     * Decimal string (< 2^256) to exactly 256 bits, MSB first, with a
+     * fixed amount of work regardless of the value (for secret scalars)
+     */
+    private static function numToBits256(#[\SensitiveParameter] string $num): array
+    {
+        $bytes = self::numToBytes($num, 32); // little-endian, fixed 32 rounds
+        $bits  = [];
+
+        for ($i = 31; $i >= 0; $i--) {
+            $byte = ord($bytes[$i]);
+            for ($j = 7; $j >= 0; $j--) {
+                $bits[] = ($byte >> $j) & 1;
+            }
+        }
+
+        return $bits;
+    }
+
     /** Apply Ed25519 clamping to the lower 32 bytes of the secret hash */
-    private static function clamp(string $bytes): string
+    private static function clamp(#[\SensitiveParameter] string $bytes): string
     {
         $bytes[0]  = chr(ord($bytes[0]) & 248);
         $bytes[31] = chr((ord($bytes[31]) & 127) | 64);

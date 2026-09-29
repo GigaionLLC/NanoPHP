@@ -117,8 +117,12 @@ is a thin front-end over `NanoWallet`. Details in
   link merely starts with "epoch". Wallet state checks must fail closed:
   every block the wallet signs inherits previous/balance/representative
   from the verified frontier.
-- The crypto is intentionally not constant-time (server-side use); don't
-  advertise it for hostile-input timing scenarios.
+- The crypto is not constant-time: secret scalars use a fixed-length,
+  Z-blinded ladder (`scalarMult(..., secret: true)`), but bcmath timing is
+  value-dependent. Don't advertise it for server-side signing services or
+  other attacker-timed signing; keep the ladder fixed-length and its output
+  byte-identical (verify.php has a deterministic 32-vector digest).
+- `Ed25519Blake2b::verify` rejects small-order A and R; keep that check.
 - Pure-PHP work generation (`NanoTool::work`) is only practical at low
   difficulties; real work comes from a node/work server via
   `work_generate`.

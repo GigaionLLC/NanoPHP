@@ -32,28 +32,7 @@ use GigaionLLC\NanoPHP\NanoWallet;
 
 const NANO_RAW = '1000000000000000000000000000000';
 
-$keys_a = NanoTool::seed2keys(str_repeat('0', 64), 0, true);
-$keys_b = NanoTool::seed2keys(str_repeat('F', 64), 0, true);
-$keys_c = NanoTool::seed2keys(str_repeat('1', 64), 0, true);
-
-// Account A's frontier: a real, signed open block receiving 5 NANO
-$builder = new NanoBlock($keys_a[0]);
-$builder->setWork('0000000000000000');
-$frontier_block = $builder->open(
-    str_repeat('AB', 32),
-    bcmul('5', NANO_RAW),
-    NanoWallet::DEFAULT_REPRESENTATIVE
-);
-$frontier_hash = $builder->blockId;
-
 const EPOCH_V2_LINK = '65706F636820763220626C6F636B000000000000000000000000000000000000';
-
-$keys_d = NanoTool::seed2keys(str_repeat('2', 64), 0, true);
-$keys_e = NanoTool::seed2keys(str_repeat('3', 64), 0, true);
-$keys_f = NanoTool::seed2keys(str_repeat('4', 64), 0, true);
-$keys_g = NanoTool::seed2keys(str_repeat('5', 64), 0, true);
-$keys_epoch = NanoTool::seed2keys(str_repeat('6', 64), 0, true);
-$keys_attacker = NanoTool::seed2keys(str_repeat('7', 64), 0, true);
 
 // Build a state block for an account, signed with $signer_private
 function mock_state_block(array $account_keys, string $previous, string $balance, string $link, string $signer_private): array
@@ -79,37 +58,94 @@ function mock_state_block(array $account_keys, string $previous, string $balance
     ]];
 }
 
-$fake_epoch_e = mock_state_block($keys_e, str_repeat('E0', 32), bcmul('1000000', NANO_RAW), EPOCH_V2_LINK, $keys_attacker[0]);
-$fake_epoch_e['contents']['signature'] = str_repeat('0', 128);
+// The ledger costs a few hundred ms of key derivation and signing, and the
+// built-in server runs this script for every request: build it once per
+// test run when the test passes a cache file path (MOCK_LEDGER_CACHE)
+function mock_ledger(): array
+{
+    $keys_a = NanoTool::seed2keys(str_repeat('0', 64), 0, true);
+    $keys_b = NanoTool::seed2keys(str_repeat('F', 64), 0, true);
+    $keys_c = NanoTool::seed2keys(str_repeat('1', 64), 0, true);
 
-$foreign_signed_f = mock_state_block($keys_f, str_repeat('F0', 32), bcmul('5000000', NANO_RAW), str_repeat('0', 64), $keys_attacker[0]);
+    // Account A's frontier: a real, signed open block receiving 5 NANO
+    $builder = new NanoBlock($keys_a[0]);
+    $builder->setWork('0000000000000000');
+    $frontier_block = $builder->open(
+        str_repeat('AB', 32),
+        bcmul('5', NANO_RAW),
+        NanoWallet::DEFAULT_REPRESENTATIVE
+    );
+    $frontier_hash = $builder->blockId;
 
-$epoch_g = mock_state_block($keys_g, str_repeat('A0', 32), bcmul('3', NANO_RAW), EPOCH_V2_LINK, $keys_epoch[0]);
+    $keys_d = NanoTool::seed2keys(str_repeat('2', 64), 0, true);
+    $keys_e = NanoTool::seed2keys(str_repeat('3', 64), 0, true);
+    $keys_f = NanoTool::seed2keys(str_repeat('4', 64), 0, true);
+    $keys_g = NanoTool::seed2keys(str_repeat('5', 64), 0, true);
+    $keys_epoch = NanoTool::seed2keys(str_repeat('6', 64), 0, true);
+    $keys_attacker = NanoTool::seed2keys(str_repeat('7', 64), 0, true);
 
-// account => [account_info response, frontier block contents]
-$scenarios = [
-    $keys_d[2] => [
-        ['frontier' => str_repeat('D0', 32), 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => '0', 'block_count' => '1'],
-        ['type' => 'send']
-    ],
-    $keys_e[2] => [
-        ['frontier' => $fake_epoch_e['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $fake_epoch_e['contents']['balance'], 'block_count' => '2'],
-        $fake_epoch_e['contents']
-    ],
-    $keys_f[2] => [
-        ['frontier' => $foreign_signed_f['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $foreign_signed_f['contents']['balance'], 'block_count' => '2'],
-        $foreign_signed_f['contents']
-    ],
-    $keys_g[2] => [
-        ['frontier' => $epoch_g['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $epoch_g['contents']['balance'], 'block_count' => '2'],
-        $epoch_g['contents']
-    ],
-];
+    $fake_epoch_e = mock_state_block($keys_e, str_repeat('E0', 32), bcmul('1000000', NANO_RAW), EPOCH_V2_LINK, $keys_attacker[0]);
+    $fake_epoch_e['contents']['signature'] = str_repeat('0', 128);
 
-$scenario_frontiers = [];
-foreach ($scenarios as $scenario) {
-    $scenario_frontiers[$scenario[0]['frontier']] = $scenario[1];
+    $foreign_signed_f = mock_state_block($keys_f, str_repeat('F0', 32), bcmul('5000000', NANO_RAW), str_repeat('0', 64), $keys_attacker[0]);
+
+    $epoch_g = mock_state_block($keys_g, str_repeat('A0', 32), bcmul('3', NANO_RAW), EPOCH_V2_LINK, $keys_epoch[0]);
+
+    // Node-wallet accounts only need valid addresses, not keys
+    $ext_accounts = [
+        'x' => NanoTool::public2account(str_repeat('A1', 32)),
+        'y' => NanoTool::public2account(str_repeat('B2', 32)),
+        'z' => NanoTool::public2account(str_repeat('C3', 32)),
+    ];
+
+    // account => [account_info response, frontier block contents]
+    $scenarios = [
+        $keys_d[2] => [
+            ['frontier' => str_repeat('D0', 32), 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => '0', 'block_count' => '1'],
+            ['type' => 'send']
+        ],
+        $keys_e[2] => [
+            ['frontier' => $fake_epoch_e['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $fake_epoch_e['contents']['balance'], 'block_count' => '2'],
+            $fake_epoch_e['contents']
+        ],
+        $keys_f[2] => [
+            ['frontier' => $foreign_signed_f['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $foreign_signed_f['contents']['balance'], 'block_count' => '2'],
+            $foreign_signed_f['contents']
+        ],
+        $keys_g[2] => [
+            ['frontier' => $epoch_g['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $epoch_g['contents']['balance'], 'block_count' => '2'],
+            $epoch_g['contents']
+        ],
+    ];
+
+    $scenario_frontiers = [];
+    foreach ($scenarios as $scenario) {
+        $scenario_frontiers[$scenario[0]['frontier']] = $scenario[1];
+    }
+
+    return compact(
+        'keys_a', 'keys_b', 'keys_c', 'keys_d', 'keys_e', 'keys_f', 'keys_g',
+        'keys_epoch', 'keys_attacker', 'frontier_block', 'frontier_hash',
+        'ext_accounts', 'scenarios', 'scenario_frontiers'
+    );
 }
+
+$ledger_cache = getenv('MOCK_LEDGER_CACHE');
+$ledger = null;
+if ($ledger_cache !== false && $ledger_cache !== '' && is_file($ledger_cache)) {
+    $ledger = unserialize((string) file_get_contents($ledger_cache), ['allowed_classes' => false]);
+}
+if (!is_array($ledger)) {
+    $ledger = mock_ledger();
+    if ($ledger_cache !== false && $ledger_cache !== '') {
+        // Write-then-rename, so a concurrently started server never reads
+        // a partial file
+        $partial = $ledger_cache . '.' . getmypid();
+        file_put_contents($partial, serialize($ledger));
+        @rename($partial, $ledger_cache);
+    }
+}
+extract($ledger);
 
 // Optional HTTP Basic Auth gate: start the server with MOCK_BASIC_AUTH set
 // to "user:pass" to require matching credentials on every request
@@ -122,6 +158,23 @@ if ($required_auth !== false && $required_auth !== '') {
         echo json_encode(['error' => 'Unauthorized']);
         exit;
     }
+}
+
+// Redirect endpoint for NanoRPC redirect tests: /redirect?to=URL[&code=N]
+if (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) === '/redirect') {
+    http_response_code((int) ($_GET['code'] ?? 307));
+    header('Location: ' . ($_GET['to'] ?? '/'));
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Redirected']);
+    exit;
+}
+
+// Hostile node for terminal-injection tests: every answer is an error
+// message carrying ANSI escape sequences
+if (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) === '/evil') {
+    header('Content-Type: application/json');
+    echo json_encode(['error' => "bad\x1b[2J\x1b[31mnode\x07\r\nspoofed line\xc2\x9b31m"]);
+    exit;
 }
 
 $request = json_decode(file_get_contents('php://input'), true);
@@ -194,10 +247,57 @@ switch ($request['action'] ?? '') {
         echo json_encode(['blocks' => $blocks]);
         break;
 
-    case 'work_generate':
+    case 'block_count':
+        echo json_encode(['count' => '42', 'unchecked' => '0', 'cemented' => '42']);
+        break;
+
+    case 'echo_auth':
+        // Reports what reached this server (redirect credential tests)
         echo json_encode([
-            'work'       => '2b3d689a4c7ac046',
-            'difficulty' => $request['difficulty'] ?? 'fffffff800000000'
+            'authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? '',
+            'method'        => $_SERVER['REQUEST_METHOD'] ?? ''
+        ]);
+        break;
+
+    // Node wallet "EXTWALLET" for NanoRPCExt wallet_send / wallet_sweep
+    // tests: X has 5 raw, Y 3 raw, Z 4 raw; sends from Z fail, and every
+    // send must carry a 128-bit random hex idempotency id
+    case 'wallet_info':
+        if (($request['wallet'] ?? '') === 'EXTWALLET') {
+            echo json_encode(['balance' => '12', 'pending' => '0', 'receivable' => '0', 'accounts_count' => '3']);
+        } else {
+            echo json_encode(['error' => 'Wallet not found']);
+        }
+        break;
+
+    case 'wallet_balances':
+        echo json_encode(['balances' => [
+            $ext_accounts['x'] => ['balance' => '5', 'pending' => '0', 'receivable' => '0'],
+            $ext_accounts['y'] => ['balance' => '3', 'pending' => '0', 'receivable' => '0'],
+            $ext_accounts['z'] => ['balance' => '4', 'pending' => '0', 'receivable' => '0'],
+        ]]);
+        break;
+
+    case 'send':
+        if (!preg_match('/^[0-9a-f]{32}$/D', (string) ($request['id'] ?? ''))) {
+            echo json_encode(['error' => 'Bad id']);
+        } elseif (($request['source'] ?? '') === $ext_accounts['z']) {
+            echo json_encode(['error' => 'Insufficient balance']);
+        } else {
+            echo json_encode(['block' => str_repeat('AB', 32)]);
+        }
+        break;
+
+    case 'work_generate':
+        // Real work at the cheap test difficulty the wallet tests configure
+        // (work_difficulty_* options); a fixed bogus value otherwise, which
+        // the wallet must refuse to publish
+        $difficulty = strtolower($request['difficulty'] ?? 'fffffff800000000');
+        echo json_encode([
+            'work'       => strcmp($difficulty, 'f000000000000000') <= 0
+                ? strtolower(NanoTool::work($request['hash'], $difficulty))
+                : '2b3d689a4c7ac046',
+            'difficulty' => $difficulty
         ]);
         break;
 

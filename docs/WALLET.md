@@ -66,6 +66,7 @@ message.
 | `epoch_signers` | live network signers | map of exact epoch link (hex) => signer public key, used to verify epoch frontiers; override only for test/beta networks |
 | `work_source` | `'node'` | `'node'` = `work_generate` RPC; `'local'` = pure-PHP CPU work (only sane at low difficulties); `'node_fallback'` = node first, CPU on failure |
 | `work_rpc` | the main `NanoRPC` | separate `NanoRPC` instance for `work_generate`, e.g. a dedicated work server |
+| `work_difficulty_send` / `work_difficulty_receive` | `WORK_SEND` / `WORK_RECEIVE` | work thresholds (16 hex chars), only for networks with other thresholds (test networks). Work returned by `work_generate` is checked locally against them with `NanoTool::validWork` before a block is published (`node_fallback` then falls back to local work) |
 
 ### Proof of work
 

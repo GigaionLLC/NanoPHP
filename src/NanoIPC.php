@@ -115,6 +115,12 @@ class NanoIPC
             throw new NanoIPCException("Invalid transport type: $transport_type");
         }
         
+        // Largest response frame accepted, in bytes. The frame length is
+        // peer-controlled (up to 4 GiB), so it is checked before reading.
+        $this->options['max_response_size'] = isset($options['max_response_size'])
+            ? (int) $options['max_response_size']
+            : 64 * 1024 * 1024;
+
         $this->transportType = $transport_type;
         $this->nanoEncoding  = 2;
         $this->nanoPreamble  = 'N' . chr($this->nanoEncoding) . chr(0) . chr(0);
@@ -155,10 +161,10 @@ class NanoIPC
     // *  Set Nano API key
     // *
     
-    public function setNanoAPIKey(string $nano_api_key)
+    public function setNanoAPIKey(#[\SensitiveParameter] string $nano_api_key)
     {
         if (empty($nano_api_key)){
-            throw new NanoIPCException("Invalid Nano API key: $nano_api_key");
+            throw new NanoIPCException("Invalid Nano API key: empty");
         }
         
         $this->nanoAPIKey = (string) $nano_api_key;
@@ -353,24 +359,10 @@ class NanoIPC
             if ($this->listen) {
                 return;
             }
-            
-            // Response lenght
-            $size = fread($this->transport, 4);
-            if ($size === false) {
-                $this->error = 'Unable to receive response lenght';
-                return false;
-            }
-            if (strlen($size) == 0) {
-                $this->error = 'Unable to receive response lenght';
-                return false;
-            }
-            
-            $size = unpack("N", $size);
-            
-            // Response
-            $this->responseRaw = fread($this->transport, $size[1]);
+
+            // Response (length-prefixed frame)
+            $this->responseRaw = $this->readFrame();
             if ($this->responseRaw === false) {
-                $this->error = 'Unable to receive response';
                 return false;
             }
         } else {
@@ -484,23 +476,9 @@ class NanoIPC
         if ($this->transportType == 'unix' ||
             $this->transportType == 'tcp'
         ) {
-            // Response lenght
-            $size = fread($this->transport, 4);
-            if ($size === false) {
-                $this->error = 'Unable to receive response lenght';
-                return false;
-            }
-            if (strlen($size) == 0) {
-                $this->error = 'Unable to receive response lenght';
-                return false;
-            }
-            
-            $size = unpack("N", $size);
-            
-            // Response
-            $this->responseRaw = fread($this->transport, $size[1]);
+            // Response (length-prefixed frame)
+            $this->responseRaw = $this->readFrame();
             if ($this->responseRaw === false) {
-                $this->error = 'Unable to receive response';
                 return false;
             }
         } else {
@@ -533,5 +511,58 @@ class NanoIPC
         } else {
             throw new NanoIPCException("Invalid Nano encoding");
         }
+    }
+
+
+    // *
+    // *  Framed reads
+    // *
+
+    /**
+     * Read one response: 4-byte big-endian length, then that many bytes.
+     * The length is checked against max_response_size before anything is
+     * allocated, and the body is read in a loop (a single fread returns
+     * short on sockets). On failure sets error, closes the (now out of
+     * sync) connection when needed and returns false.
+     */
+    private function readFrame()
+    {
+        $size = $this->readExact(4);
+        if ($size === null) {
+            $this->error = 'Unable to receive response lenght';
+            return false;
+        }
+
+        $size = unpack("N", $size)[1];
+
+        if ($size > $this->options['max_response_size']) {
+            $this->error = "Response size $size exceeds max_response_size ({$this->options['max_response_size']} bytes)";
+            $this->close();
+            return false;
+        }
+
+        $response = $size > 0 ? $this->readExact($size) : '';
+        if ($response === null) {
+            $this->error = 'Unable to receive response';
+            $this->close();
+            return false;
+        }
+
+        return $response;
+    }
+
+    /** Exactly $length bytes, or null on EOF, error or timeout */
+    private function readExact(int $length): ?string
+    {
+        $data = '';
+        while (strlen($data) < $length) {
+            $chunk = @fread($this->transport, min(65536, $length - strlen($data)));
+            if ($chunk === false || $chunk === '') {
+                return null;
+            }
+            $data .= $chunk;
+        }
+
+        return $data;
     }
 }

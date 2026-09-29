@@ -294,6 +294,15 @@ check('mnem2mseed BIP39 vector',
     'c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04'
 );
 
+check('mnem2mseed with checksum verification: same result for a valid mnemonic',
+    NanoTool::mnem2mseed($abandon, 'TREZOR', true), NanoTool::mnem2mseed($abandon, 'TREZOR'));
+$abandon_typo = $abandon;
+$abandon_typo[11] = 'above'; // valid word, wrong checksum
+check('mnem2mseed without verification still accepts a checksum typo (unchanged default)',
+    strlen(NanoTool::mnem2mseed($abandon_typo, 'TREZOR')), 128);
+checkThrows('mnem2mseed with verification rejects a checksum typo',
+    fn() => NanoTool::mnem2mseed($abandon_typo, 'TREZOR', true));
+
 $mseed_keys = NanoTool::mseed2keys(NanoTool::mnem2mseed($abandon, 'TREZOR'), 0, true);
 check('mseed2keys derives valid account', NanoTool::account2public($mseed_keys[2]), $mseed_keys[1]);
 
@@ -327,6 +336,169 @@ check('validSign rejects tampered signature', NanoTool::validSign($msg, $bad_sig
 
 $work = NanoTool::work($genesis_pub, '8000000000000000');
 check('generated work validates', NanoTool::validWork($genesis_pub, '8000000000000000', $work));
+
+
+// *
+// *  NanoCLI: no shell injection through option values or names
+// *  (PHP itself stands in for the nano_node binary)
+// *
+
+$cli = new \GigaionLLC\NanoPHP\NanoCLI(PHP_BINARY);
+$payloads = ['x & echo INJECTED_MARKER', 'x; echo INJECTED_MARKER', 'x | echo INJECTED_MARKER',
+             'x && echo INJECTED_MARKER', '$(echo INJECTED_MARKER)', '`echo INJECTED_MARKER`'];
+$injected = false;
+foreach ($payloads as $payload) {
+    $out = $cli->version(['account' => $payload]);
+    if (strpos(implode("\n", (array) $out) . (string) $cli->error, 'INJECTED_MARKER') !== false) {
+        $injected = true;
+    }
+}
+check('NanoCLI option values cannot inject shell commands', $injected, false);
+check('NanoCLI benign call still runs the binary', is_array($cli->version()) && $cli->status === 0);
+checkThrows('NanoCLI rejects a method name with shell syntax', fn() => $cli->{'version & echo x'}());
+checkThrows('NanoCLI rejects an option name with shell syntax', fn() => $cli->version(['a & echo x' => '1']));
+checkThrows('NanoCLI rejects an option name with a dash', fn() => $cli->version(['--x' => '1']));
+
+
+// *
+// *  Secrets never appear in exception messages, traces or object dumps
+// *  (throwaway values; a trailing newline is the classic trigger)
+// *
+
+// Returns [message, trace] of the exception $fn throws ('' if none)
+function thrownText(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (\Throwable $e) {
+        return $e->getMessage() . "\n" . $e->getTraceAsString();
+    }
+    return '';
+}
+
+$secret_seed  = strtoupper(bin2hex(random_bytes(32)));
+$secret_key   = strtoupper(bin2hex(random_bytes(32)));
+$secret_mseed = strtoupper(bin2hex(random_bytes(64)));
+$secret_hex   = strtoupper(bin2hex(random_bytes(16)));
+$secret_words = NanoTool::hex2mnem($secret_hex);
+
+$leaks = [
+    'seed2keys'      => [fn() => NanoTool::seed2keys($secret_seed . "\n"), $secret_seed],
+    'private2public' => [fn() => NanoTool::private2public($secret_key . ' '), $secret_key],
+    'public2account' => [fn() => NanoTool::public2account($secret_key . ' '), $secret_key],
+    'sign'           => [fn() => NanoTool::sign('AB', $secret_key . "\n"), $secret_key],
+    'mseed2keys'     => [fn() => NanoTool::mseed2keys($secret_mseed . "\n"), $secret_mseed],
+    'hex2mnem'       => [fn() => NanoTool::hex2mnem($secret_hex . 'Z'), $secret_hex],
+    'NanoBlock'      => [fn() => new NanoBlock($secret_key . "\n"), $secret_key],
+    'NanoWallet'     => [fn() => \GigaionLLC\NanoPHP\NanoWallet::fromPrivateKey(new \GigaionLLC\NanoPHP\NanoRPC(), $secret_key . "\n"), $secret_key],
+];
+foreach ($leaks as $name => [$fn, $secret]) {
+    $text = thrownText($fn);
+    // Traces print the first 15 characters of string arguments by default
+    check("$name error omits the secret", $text !== '' && stripos($text, substr($secret, 0, 12)) === false);
+}
+
+$typo_words = $secret_words;
+$typo_words[5] = 'notabip39word' . $secret_words[5];
+$text = thrownText(fn() => NanoTool::mnem2hex($typo_words));
+check('mnem2hex error names the position, not the word', strpos($text, 'position 6') !== false && strpos($text, $typo_words[5]) === false);
+$text = thrownText(fn() => NanoTool::mnem2mseed($typo_words));
+check('mnem2mseed error names the position, not the word', strpos($text, 'position 6') !== false && strpos($text, $typo_words[5]) === false);
+
+$dump_block  = new NanoBlock($secret_key);
+$dump_wallet = \GigaionLLC\NanoPHP\NanoWallet::fromPrivateKey(new \GigaionLLC\NanoPHP\NanoRPC(), $secret_key);
+ob_start();
+var_dump($dump_block, $dump_wallet);
+$dumps = ob_get_clean() . print_r($dump_block, true) . print_r($dump_wallet, true);
+check('var_dump/print_r of NanoBlock and NanoWallet omit the private key', stripos($dumps, $secret_key) === false);
+check('NanoWallet dump still shows the account', strpos($dumps, $dump_wallet->address()) !== false);
+
+
+// *
+// *  Trailing newlines are invalid input, rejected with a clean exception
+// *  ("$" in a regex also matches before a final "\n")
+// *
+
+foreach (["1\n", "0.1\n", ".5\n", "1\n\n"] as $newline_amount) {
+    $caught = null;
+    try {
+        NanoTool::den2raw($newline_amount, 'NANO');
+    } catch (\Throwable $e) {
+        $caught = get_class($e);
+    }
+    check('den2raw rejects ' . json_encode($newline_amount) . ' with NanoToolException', $caught, \GigaionLLC\NanoPHP\NanoToolException::class);
+}
+check('account2public rejects a trailing newline',
+    NanoTool::account2public(substr($keys[2], 0, 64) . "\n"), false);
+checkThrows('string2burn rejects a trailing newline', fn() => NanoTool::string2burn("nanophp\n"));
+checkThrows('string2burn rejects a newline filling character', fn() => NanoTool::string2burn('nanophp', '1', "1\n"));
+
+
+// *
+// *  Small-order public keys and R values are rejected (the 8 torsion
+// *  points; with them S = 0 "signs" arbitrary messages)
+// *
+
+$small_order = [
+    '0100000000000000000000000000000000000000000000000000000000000000', // identity
+    'ECFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF7F', // order 2
+    '0000000000000000000000000000000000000000000000000000000000000000', // order 4
+    '0000000000000000000000000000000000000000000000000000000000000080', // order 4
+    '26E8958FC2B227B045C3F489F2EF98F0D5DFAC05D3C63339B13802886D53FC05', // order 8
+    '26E8958FC2B227B045C3F489F2EF98F0D5DFAC05D3C63339B13802886D53FC85', // order 8
+    'C7176A703D4DD84FBA3C0B760D10670F2A2053FA2C39CCC64EC7FD7792AC037A', // order 8
+    'C7176A703D4DD84FBA3C0B760D10670F2A2053FA2C39CCC64EC7FD7792AC03FA', // order 8
+];
+
+// The identity-key forgery from the security review: A = R = identity,
+// S = 0 used to verify for any message
+$identity_account = NanoTool::public2account($small_order[0]);
+$forged_sig = $small_order[0] . str_repeat('0', 64);
+check('identity-key forgery rejected (validSign)',
+    NanoTool::validSign(strtoupper(bin2hex(random_bytes(32))), $forged_sig, $identity_account), false);
+
+$torsion_forgeries = 0;
+$forgery_msg = hex2bin('4E414E4F504850'); // any message
+foreach ($small_order as $a_hex) {
+    foreach ($small_order as $r_hex) {
+        if (Ed25519Blake2b::verify($forgery_msg, hex2bin($r_hex) . str_repeat("\0", 32), hex2bin($a_hex))) {
+            $torsion_forgeries++;
+        }
+    }
+}
+check('no small-order A/R combination verifies with S = 0', $torsion_forgeries, 0);
+
+// A genuine signature by a real key must not be affected
+$real_keys = NanoTool::seed2keys(str_repeat('0', 64), 0, true);
+$real_msg  = str_repeat('AB', 32);
+check('genuine signature still verifies after small-order checks',
+    NanoTool::validSign($real_msg, NanoTool::sign($real_msg, $real_keys[0]), $real_keys[2]), $real_msg);
+
+
+// *
+// *  Fixed-length signing ladder: output must stay byte-identical.
+// *  32 deterministic keys/messages (lengths 0..62 bytes); the digest was
+// *  produced by the previous variable-length implementation.
+// *
+
+$ladder_outputs = '';
+$ladder_verified = true;
+for ($i = 0; $i < 32; $i++) {
+    $ladder_key = Blake2b::hash("nanophp-ladder-key-$i", 32);
+    $ladder_msg = substr(Blake2b::hash("nanophp-ladder-msg-$i", 64), 0, $i * 2);
+    $ladder_pub = Ed25519Blake2b::publicKey($ladder_key);
+    $ladder_sig = Ed25519Blake2b::sign($ladder_msg, $ladder_key);
+    $ladder_verified = $ladder_verified && Ed25519Blake2b::verify($ladder_msg, $ladder_sig, $ladder_pub);
+    $ladder_outputs .= $ladder_pub . $ladder_sig;
+    if ($i === 0) {
+        check('ladder vector 0 public key', bin2hex($ladder_pub), '1303101bc612286f430d50df6e81b9f701b48a7a291cbb5c4d69aa9994ac7b90');
+        check('ladder vector 0 signature (empty message)', bin2hex($ladder_sig),
+            '9fa4453ac7fa60d7e0eaca091014a708bcda49ad2af291a64eb32d25456d116367f3e04239715895abd3c326d423a0ac93355c584ee9eeeedd1f53933815320d');
+    }
+}
+check('32 deterministic keys/signatures identical to the previous implementation',
+    hash('sha256', $ladder_outputs), '0d3bea5b8f71613a2d43e5eab5cbe640490394aed37496a30ba3dcb1cd9936b0');
+check('32 deterministic signatures verify', $ladder_verified);
 
 
 // *

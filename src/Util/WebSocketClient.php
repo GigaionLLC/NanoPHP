@@ -22,13 +22,20 @@ class WebSocketClient
     private float $timeout;
     private int $fragmentSize;
     private int $maxMessageSize;
+    private float $frameTimeout;
     private bool $closed = false;
+
+    // Upper bound for the HTTP response headers of the opening handshake
+    private const MAX_HANDSHAKE_SIZE = 16384;
 
     /**
      * @param string $url     ws://host:port/path or wss://host:port/path
      * @param array  $options timeout (seconds, default 60), fragment_size
      *                        (outgoing, default 4096), max_message_size
      *                        (incoming cap in bytes, default 16 MiB),
+     *                        frame_timeout (seconds a frame may take to
+     *                        arrive completely once its first bytes did,
+     *                        default max(timeout, 30)),
      *                        headers (list of extra handshake header lines),
      *                        context (stream context options array, e.g. ssl)
      */
@@ -53,6 +60,7 @@ class WebSocketClient
         $this->timeout        = (float) ($options['timeout'] ?? 60);
         $this->fragmentSize   = (int) ($options['fragment_size'] ?? 4096);
         $this->maxMessageSize = (int) ($options['max_message_size'] ?? 16 * 1024 * 1024);
+        $this->frameTimeout   = (float) ($options['frame_timeout'] ?? max($this->timeout, 30.0));
 
         $context = stream_context_create($options['context'] ?? []);
         $remote  = ($secure ? 'ssl://' : 'tcp://') . $host . ':' . $port;
@@ -93,9 +101,17 @@ class WebSocketClient
 
         $this->write($request . "\r\n");
 
-        // Read response headers until the blank line
+        // Read response headers until the blank line, bounded in size and
+        // time so a hostile server can't stall or flood the handshake
         $response = '';
+        $deadline = microtime(true) + $this->timeout;
         while (strpos($response, "\r\n\r\n") === false) {
+            if (strlen($response) > self::MAX_HANDSHAKE_SIZE) {
+                throw new WebSocketClientException('WebSocket handshake response headers too large');
+            }
+            if (microtime(true) > $deadline) {
+                throw new WebSocketClientException('Timed out during WebSocket handshake');
+            }
             $line = fgets($this->socket, 8192);
             if ($line === false) {
                 throw new WebSocketClientException('Connection closed during WebSocket handshake');
@@ -254,6 +270,9 @@ class WebSocketClient
             return null;
         }
 
+        // Once a frame has started, the rest must arrive within frame_timeout
+        $deadline = microtime(true) + $this->frameTimeout;
+
         $byte1 = ord($header[0]);
         $byte2 = ord($header[1]);
 
@@ -263,9 +282,9 @@ class WebSocketClient
         $length = $byte2 & 0x7f;
 
         if ($length == 126) {
-            $length = unpack('n', $this->readStrict(2))[1];
+            $length = unpack('n', $this->readStrict(2, $deadline))[1];
         } elseif ($length == 127) {
-            $length = unpack('J', $this->readStrict(8))[1];
+            $length = unpack('J', $this->readStrict(8, $deadline))[1];
         }
 
         // Refuse to allocate for an oversized (or, on the 64-bit wire,
@@ -277,9 +296,9 @@ class WebSocketClient
             );
         }
 
-        $mask = $masked ? $this->readStrict(4) : '';
+        $mask = $masked ? $this->readStrict(4, $deadline) : '';
 
-        $payload = $length > 0 ? $this->readStrict($length) : '';
+        $payload = $length > 0 ? $this->readStrict($length, $deadline) : '';
 
         if ($masked) {
             for ($i = 0; $i < $length; $i++) {
@@ -299,20 +318,41 @@ class WebSocketClient
         }
     }
 
-    /** Read exactly $length bytes; null if the read timed out before the first byte */
-    private function read(int $length): ?string
+    /**
+     * Read exactly $length bytes; null if the read timed out before the
+     * first byte. With a $deadline (microtime), throws once it passes.
+     */
+    private function read(int $length, ?float $deadline = null): ?string
     {
         $data = '';
         while (strlen($data) < $length) {
+            if ($deadline !== null) {
+                $remaining = $deadline - microtime(true);
+                if ($remaining <= 0) {
+                    // Half a frame was read; the stream can't be resumed
+                    $this->closed = true;
+                    @fclose($this->socket);
+                    throw new WebSocketClientException('Timed out waiting for the rest of a WebSocket frame');
+                }
+                $this->setSocketTimeout(min($this->timeout, $remaining));
+            }
+
             $chunk = @fread($this->socket, $length - strlen($data));
 
+            // (read the timed_out flag before restoring the timeout, which
+            // resets it)
+            $timed_out = !empty(stream_get_meta_data($this->socket)['timed_out']);
+
+            if ($deadline !== null) {
+                $this->setSocketTimeout($this->timeout);
+            }
+
             if ($chunk === '' || $chunk === false) {
-                $meta = stream_get_meta_data($this->socket);
-                if (!empty($meta['timed_out'])) {
+                if ($timed_out) {
                     if ($data === '') {
                         return null;
                     }
-                    // Timed out mid-frame: keep waiting for the rest
+                    // Timed out mid-read: keep waiting (until the deadline)
                     continue;
                 }
                 $this->closed = true;
@@ -325,14 +365,22 @@ class WebSocketClient
         return $data;
     }
 
-    private function readStrict(int $length): string
+    /** Read exactly $length bytes of a started frame, before $deadline */
+    private function readStrict(int $length, float $deadline): string
     {
         while (true) {
-            $data = $this->read($length);
+            $data = $this->read($length, $deadline);
             if ($data !== null) {
                 return $data;
             }
-            // Timeout between frame header and body: keep waiting
+            // Timeout between frame header and body: keep waiting, the
+            // deadline check in read() ends a stalled peer
         }
+    }
+
+    private function setSocketTimeout(float $seconds): void
+    {
+        $seconds = max($seconds, 0.001);
+        stream_set_timeout($this->socket, (int) $seconds, (int) (($seconds - (int) $seconds) * 1e6));
     }
 }

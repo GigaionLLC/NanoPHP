@@ -17,7 +17,7 @@
  *
  * Like atto, every subcommand except `new` and `node` expects a seed as the
  * first line of standard input:
- *   php nanophp new > seed.txt
+ *   (umask 077; php nanophp new > seed.txt)   # keep the seed file private
  *   php nanophp address < seed.txt
  *
  * The node subcommand probes a built-in list of public RPC nodes, reports
@@ -27,7 +27,9 @@
  *
  * Node selection precedence (highest first):
  *   1. NANOPHP_NODE environment variable
- *   2. the node previously saved by `php nanophp node` (~/.nanophp-node)
+ *   2. the node previously saved by `php nanophp node` (~/.nanophp-node;
+ *      ignored when there is no HOME/USERPROFILE, and on POSIX unless it is
+ *      owned by you and not group/world-writable)
  *   3. http://localhost:7076
  *
  * Environment:
@@ -47,7 +49,7 @@ use GigaionLLC\NanoPHP\NanoRPC;
 use GigaionLLC\NanoPHP\NanoTool;
 use GigaionLLC\NanoPHP\NanoWallet;
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 
 const USAGE = <<<TXT
 Usage:
@@ -148,29 +150,86 @@ function fail(string $message): void
     exit(1);
 }
 
-function homeDir(): string
+// The user's home directory, or null when HOME/USERPROFILE are unset (cron,
+// some service units, env -i). There is deliberately no fallback to the
+// shared temp directory: another local user could plant a node file there.
+// Node-controlled text (RPC errors, block counts) goes to the terminal only
+// through this: control characters (C0, DEL, UTF-8 encoded C1) are removed
+// so a node can't inject ANSI escape sequences that rewrite the output.
+function printable($value): string
+{
+    if (!is_string($value)) {
+        $value = is_scalar($value) ? (string) $value : (string) json_encode($value);
+    }
+
+    return (string) preg_replace('/[\x00-\x1F\x7F]|\xC2[\x80-\x9F]/', '', $value);
+}
+
+function homeDir(): ?string
 {
     $home = getenv('HOME') ?: getenv('USERPROFILE');
 
-    return $home ?: sys_get_temp_dir();
+    return ($home === false || $home === '') ? null : $home;
 }
 
-function nodeConfigPath(): string
+function nodeConfigPath(): ?string
 {
-    return homeDir() . DIRECTORY_SEPARATOR . '.nanophp-node';
+    $home = homeDir();
+
+    return $home === null ? null : $home . DIRECTORY_SEPARATOR . '.nanophp-node';
+}
+
+// On POSIX systems, only trust a node file that belongs to the effective user
+// and that nobody else can write (it decides which node the wallet talks to).
+function nodeFileTrusted(string $path): bool
+{
+    if (PHP_OS_FAMILY === 'Windows') {
+        return true;
+    }
+
+    clearstatcache(true, $path);
+    $perms = @fileperms($path);
+    $owner = @fileowner($path);
+    if ($perms === false || $owner === false || ($perms & 0022) !== 0) {
+        return false;
+    }
+
+    if (function_exists('posix_geteuid')) {
+        return $owner === posix_geteuid();
+    }
+
+    // Without the posix extension, the home directory's owner stands in for
+    // the current user
+    $home = homeDir();
+
+    return $home !== null && @fileowner($home) === $owner;
 }
 
 function savedNode(): ?string
 {
     $path = nodeConfigPath();
-    if (is_file($path)) {
-        $value = trim((string) file_get_contents($path));
-        if ($value !== '') {
-            return $value;
-        }
+    if ($path === null || !is_file($path)) {
+        return null;
     }
 
-    return null;
+    if (!nodeFileTrusted($path)) {
+        fwrite(STDERR, "Warning: ignoring $path: it must be owned by you and not writable by group or others" .
+                       " (fix with: chmod go-w $path).\n");
+
+        return null;
+    }
+
+    $value = trim((string) file_get_contents($path));
+
+    return $value !== '' ? $value : null;
+}
+
+function isLoopbackHost(string $host): bool
+{
+    $host = strtolower(trim($host, '[]'));
+
+    return $host === 'localhost' || $host === '::1' ||
+           preg_match('/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/D', $host) === 1;
 }
 
 function rpcFromEndpoint(string $endpoint, ?int $timeout = null): NanoRPC
@@ -193,6 +252,11 @@ function rpcFromEndpoint(string $endpoint, ?int $timeout = null): NanoRPC
     $username = getenv('NANOPHP_BASIC_AUTH_USERNAME');
     if ($username !== false && $username !== '') {
         $password = getenv('NANOPHP_BASIC_AUTH_PASSWORD');
+        if (strtolower($scheme) !== 'https' && !isLoopbackHost($parts['host'])) {
+            fwrite(STDERR, "Warning: sending HTTP Basic Authentication credentials over plain http to " .
+                           $parts['host'] . "; they can be read on the network. Use https.
+");
+        }
         $options['headers'] = [
             'Authorization: Basic ' . base64_encode($username . ':' . ($password === false ? '' : $password))
         ];
@@ -224,14 +288,14 @@ function autoNode(): void
             $response = $rpc->block_count();
 
             if ($response !== false && isset($response['count'])) {
-                fwrite(STDERR, "online (block height " . $response['count'] . ")\n");
+                fwrite(STDERR, "online (block height " . printable($response['count']) . ")\n");
                 $selected = $endpoint;
                 break;
             }
 
-            fwrite(STDERR, "no (" . ($rpc->error ?: 'unexpected response') . ")\n");
-        } catch (Exception $e) {
-            fwrite(STDERR, "no (" . $e->getMessage() . ")\n");
+            fwrite(STDERR, "no (" . printable($rpc->error ?: 'unexpected response') . ")\n");
+        } catch (Throwable $e) {
+            fwrite(STDERR, "no (" . printable($e->getMessage()) . ")\n");
         }
     }
 
@@ -243,10 +307,18 @@ function autoNode(): void
     }
 
     $path = nodeConfigPath();
-    if (@file_put_contents($path, $selected . "\n") === false) {
+    if ($path === null) {
+        fwrite(STDERR, "Selected node: $selected\n");
+        fwrite(STDERR, "Warning: no home directory (HOME/USERPROFILE unset), so it was not saved; set NANOPHP_NODE manually.\n");
+    } elseif (@file_put_contents($path, $selected . "\n") === false) {
         fwrite(STDERR, "Selected node: $selected\n");
         fwrite(STDERR, "Warning: could not save it to $path; set NANOPHP_NODE manually.\n");
     } else {
+        // Drop group/other write permission (savedNode() checks this)
+        $perms = @fileperms($path);
+        if ($perms !== false) {
+            @chmod($path, $perms & 0755);
+        }
         fwrite(STDERR, "Selected node: $selected\n");
         fwrite(STDERR, "Saved to $path — nanophp will use it automatically from now on.\n");
     }
@@ -373,6 +445,8 @@ try {
         default:
             fail(USAGE);
     }
-} catch (Exception $e) {
-    fail('Error: ' . $e->getMessage());
+} catch (\Throwable $e) {
+    // Any error, including PHP's own (ValueError, TypeError): print only
+    // the message, never a stack trace with argument values
+    fail('Error: ' . printable($e->getMessage()));
 }
