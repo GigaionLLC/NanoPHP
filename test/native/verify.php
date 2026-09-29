@@ -178,6 +178,25 @@ check('epoch v2 block hash',
     'B666A6822CA488BCF6290F6097CA18DBD5EAFD96A689557E470DBEF81FF5E4EA'
 );
 
+// Its on-chain signature is by the live epoch v2 signer that NanoWallet
+// pins, not by the account (fetched once from the live network)
+$epoch_v2_sig = '87C9FB0987B5496DCBAE333157E26116C579A0AB376DE933177E7A56CA27458147A5A90BC995C79B0A1BB9E8299D654025150E0755764AD941D50F0B7F970102';
+check('epoch v2 block signed by the pinned epoch v2 signer',
+    NanoTool::validSign(
+        'B666A6822CA488BCF6290F6097CA18DBD5EAFD96A689557E470DBEF81FF5E4EA',
+        $epoch_v2_sig,
+        NanoTool::public2account(GigaionLLC\NanoPHP\NanoWallet::EPOCH_SIGNERS_LIVE['65706F636820763220626C6F636B000000000000000000000000000000000000'])
+    ) !== false
+);
+check('epoch v2 block not signed by the account itself',
+    NanoTool::validSign(
+        'B666A6822CA488BCF6290F6097CA18DBD5EAFD96A689557E470DBEF81FF5E4EA',
+        $epoch_v2_sig,
+        'nano_1mikerow9bqzyqo4ejra6ugr1srerq1egwmacerquch3dz1wry7mkrz4768m'
+    ),
+    false
+);
+
 
 // *
 // *  NanoBlock: build, self-verify signature, big balance handling

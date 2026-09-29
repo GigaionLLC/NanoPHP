@@ -62,7 +62,8 @@ message.
 | Key | Default | Meaning |
 |---|---|---|
 | `representative` | atto's default rep | used when opening the account on first receive |
-| `verify_info` | `true` | verify `account_info` against the frontier block (below) |
+| `verify_info` | `true` | verify `account_info` against the frontier block (below). **Never disable it with an untrusted node:** without it a node can make the wallet sign blocks that move funds |
+| `epoch_signers` | live network signers | map of exact epoch link (hex) => signer public key, used to verify epoch frontiers; override only for test/beta networks |
 | `work_source` | `'node'` | `'node'` = `work_generate` RPC; `'local'` = pure-PHP CPU work (only sane at low difficulties); `'node_fallback'` = node first, CPU on failure |
 | `work_rpc` | the main `NanoRPC` | separate `NanoRPC` instance for `work_generate`, e.g. a dedicated work server |
 
@@ -83,15 +84,21 @@ node's word for anything it can check itself:
 1. `account_info` is fetched, then `block_info` for the reported frontier;
 2. the frontier block's state hash is recomputed locally with
    `NanoTool::hashHexs`;
-3. the recomputed hash must equal the reported frontier, and the block's
+3. the frontier must be a state block **of this wallet's own account** —
+   anything else (a legacy pre-state block type, another account's block)
+   is rejected rather than skipped;
+4. the recomputed hash must equal the reported frontier, and the block's
    balance and representative must equal the `account_info` values;
-4. the block's signature is verified against the account's public key
-   (skipped for epoch blocks, which the network's epoch signer signs, and for
-   legacy pre-state frontiers).
+5. the block's signature is verified: against the account's own public key,
+   or — only when the link is exactly an epoch link ("epoch v1 block" /
+   "epoch v2 block") — against that epoch's pinned signer
+   (`NanoWallet::EPOCH_SIGNERS_LIVE`, from nano-node's network parameters).
 
-A node that reports a wrong balance, frontier, or representative triggers a
-`NanoWalletException` ("Account info has been manipulated") instead of a bad
-block being built and signed. Additionally, `process` responses must confirm
+Every step fails closed. A node that reports a wrong balance, frontier, or
+representative triggers a `NanoWalletException` ("Account info has been
+manipulated" / "cannot be verified") instead of a bad block being built and
+signed. Receivables with a malformed hash or a zero/non-numeric amount are
+ignored rather than built into a receive block. Additionally, `process` responses must confirm
 exactly the locally computed block hash.
 
 ### What still requires trust

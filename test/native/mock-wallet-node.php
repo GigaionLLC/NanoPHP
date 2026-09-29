@@ -11,6 +11,15 @@
 //  - Account C (seed 11..11, index 0): the node lies about its state
 //    (serves A's frontier with a tampered balance) to exercise the
 //    anti-manipulation check.
+//  - Account D (seed 22..22): the node claims the frontier is a legacy
+//    (non-state) block, lies about the balance and offers a receivable
+//    whose hash is an attacker's public key (the verifyInfo bypass that
+//    made a receive sign away the whole balance).
+//  - Account E (seed 33..33): fake epoch frontier, huge balance, bogus
+//    signature.
+//  - Account F (seed 44..44): state frontier for F signed by another key.
+//  - Account G (seed 55..55): genuine epoch v2 frontier, signed by a test
+//    epoch signer (seed 66..66) that the test passes via epoch_signers.
 //
 // process requests are validated for real: the block hash is recomputed
 // and the signature verified before a hash is returned.
@@ -36,6 +45,71 @@ $frontier_block = $builder->open(
     NanoWallet::DEFAULT_REPRESENTATIVE
 );
 $frontier_hash = $builder->blockId;
+
+const EPOCH_V2_LINK = '65706F636820763220626C6F636B000000000000000000000000000000000000';
+
+$keys_d = NanoTool::seed2keys(str_repeat('2', 64), 0, true);
+$keys_e = NanoTool::seed2keys(str_repeat('3', 64), 0, true);
+$keys_f = NanoTool::seed2keys(str_repeat('4', 64), 0, true);
+$keys_g = NanoTool::seed2keys(str_repeat('5', 64), 0, true);
+$keys_epoch = NanoTool::seed2keys(str_repeat('6', 64), 0, true);
+$keys_attacker = NanoTool::seed2keys(str_repeat('7', 64), 0, true);
+
+// Build a state block for an account, signed with $signer_private
+function mock_state_block(array $account_keys, string $previous, string $balance, string $link, string $signer_private): array
+{
+    $hash = NanoTool::hashHexs([
+        NanoTool::PREAMBLE_HEX,
+        $account_keys[1],
+        $previous,
+        NanoTool::account2public(NanoWallet::DEFAULT_REPRESENTATIVE),
+        NanoTool::dec2hex($balance, 16),
+        $link
+    ]);
+
+    return ['hash' => $hash, 'contents' => [
+        'type'           => 'state',
+        'account'        => $account_keys[2],
+        'previous'       => $previous,
+        'representative' => NanoWallet::DEFAULT_REPRESENTATIVE,
+        'balance'        => $balance,
+        'link'           => $link,
+        'signature'      => NanoTool::sign($hash, $signer_private),
+        'work'           => '0000000000000000'
+    ]];
+}
+
+$fake_epoch_e = mock_state_block($keys_e, str_repeat('E0', 32), bcmul('1000000', NANO_RAW), EPOCH_V2_LINK, $keys_attacker[0]);
+$fake_epoch_e['contents']['signature'] = str_repeat('0', 128);
+
+$foreign_signed_f = mock_state_block($keys_f, str_repeat('F0', 32), bcmul('5000000', NANO_RAW), str_repeat('0', 64), $keys_attacker[0]);
+
+$epoch_g = mock_state_block($keys_g, str_repeat('A0', 32), bcmul('3', NANO_RAW), EPOCH_V2_LINK, $keys_epoch[0]);
+
+// account => [account_info response, frontier block contents]
+$scenarios = [
+    $keys_d[2] => [
+        ['frontier' => str_repeat('D0', 32), 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => '0', 'block_count' => '1'],
+        ['type' => 'send']
+    ],
+    $keys_e[2] => [
+        ['frontier' => $fake_epoch_e['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $fake_epoch_e['contents']['balance'], 'block_count' => '2'],
+        $fake_epoch_e['contents']
+    ],
+    $keys_f[2] => [
+        ['frontier' => $foreign_signed_f['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $foreign_signed_f['contents']['balance'], 'block_count' => '2'],
+        $foreign_signed_f['contents']
+    ],
+    $keys_g[2] => [
+        ['frontier' => $epoch_g['hash'], 'representative' => NanoWallet::DEFAULT_REPRESENTATIVE, 'balance' => $epoch_g['contents']['balance'], 'block_count' => '2'],
+        $epoch_g['contents']
+    ],
+];
+
+$scenario_frontiers = [];
+foreach ($scenarios as $scenario) {
+    $scenario_frontiers[$scenario[0]['frontier']] = $scenario[1];
+}
 
 // Optional HTTP Basic Auth gate: start the server with MOCK_BASIC_AUTH set
 // to "user:pass" to require matching credentials on every request
@@ -63,6 +137,8 @@ switch ($request['action'] ?? '') {
                 'balance'        => $frontier_block['balance'],
                 'block_count'    => '1'
             ]);
+        } elseif (isset($scenarios[$request['account']])) {
+            echo json_encode($scenarios[$request['account']][0]);
         } elseif ($request['account'] == $keys_c[2]) {
             // Lying node: real frontier, tampered balance
             echo json_encode([
@@ -84,6 +160,11 @@ switch ($request['action'] ?? '') {
                 'confirmed'     => 'true',
                 'contents'      => $frontier_block
             ]);
+        } elseif (isset($scenario_frontiers[strtoupper($request['hash'])])) {
+            echo json_encode([
+                'confirmed' => 'true',
+                'contents'  => $scenario_frontiers[strtoupper($request['hash'])]
+            ]);
         } else {
             echo json_encode(['error' => 'Block not found']);
         }
@@ -104,6 +185,9 @@ switch ($request['action'] ?? '') {
                     'source' => $keys_a[2]
                 ]
             ];
+        } elseif ($request['account'] == $keys_d[2]) {
+            // "receivable" whose hash is really the attacker's public key
+            $blocks = [$keys_attacker[1] => ['amount' => '1', 'source' => $keys_attacker[2]]];
         } else {
             $blocks = ''; // node quirk: "" instead of {} when empty
         }
