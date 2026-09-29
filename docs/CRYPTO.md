@@ -94,8 +94,9 @@ The crypto is pinned against independent, externally produced values:
      at the legacy threshold;
    - a state send block (`D2655449...`): recomputed state hash and on-chain
      signature;
-   - an epoch v2 block: recomputed state hash (epoch blocks are signed by the
-     epoch signer, so only the hash is asserted).
+   - an epoch v2 block: recomputed state hash, and its on-chain signature
+     verifying against the pinned live epoch v2 signer (and not against the
+     account itself).
 4. **Negative tests** — tampered signatures, wrong messages, bad address
    checksums, and below-threshold work must all be rejected.
 

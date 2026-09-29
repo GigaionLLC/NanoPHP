@@ -174,6 +174,47 @@ check('verification can be disabled', $wallet_c2->accountInfo()['balance'], bcmu
 
 
 // *
+// *  Accounts D-G: forged frontiers must never be trusted
+// *
+
+function expect_manipulation(string $name, callable $fn): void
+{
+    try {
+        $fn();
+        check($name, false);
+    } catch (NanoWalletException $e) {
+        check($name, true);
+    }
+}
+
+// D: legacy-type frontier claim + attacker "receivable" (previously a
+// receive signed a block that sent the whole balance to the attacker)
+$wallet_d = NanoWallet::fromSeed($rpc, str_repeat('2', 64), 0);
+expect_manipulation('legacy-type frontier is rejected', fn() => $wallet_d->accountInfo());
+expect_manipulation('balance() with legacy-type frontier signs nothing', fn() => $wallet_d->balance());
+expect_manipulation('receiveAll() with legacy-type frontier signs nothing', fn() => $wallet_d->receiveAll());
+
+// E: an epoch link does not exempt a frontier from signature verification
+$wallet_e = NanoWallet::fromSeed($rpc, str_repeat('3', 64), 0);
+expect_manipulation('fake epoch frontier is rejected', fn() => $wallet_e->balance(false));
+
+// F: frontier of this account signed by another key
+$wallet_f = NanoWallet::fromSeed($rpc, str_repeat('4', 64), 0);
+expect_manipulation('frontier signed by a foreign key is rejected', fn() => $wallet_f->balance(false));
+
+// G: genuine epoch frontier signed by the configured epoch signer
+$epoch_signer = NanoTool::seed2keys(str_repeat('6', 64), 0, true)[1];
+$wallet_g = NanoWallet::fromSeed($rpc, str_repeat('5', 64), 0, [
+    'epoch_signers' => ['65706F636820763220626C6F636B000000000000000000000000000000000000' => $epoch_signer]
+]);
+check('epoch frontier signed by the epoch signer verifies', $wallet_g->balance(false), bcmul('3', NANO_RAW));
+
+// ...and the same block is rejected with the live signers (wrong signer)
+$wallet_g_live = NanoWallet::fromSeed($rpc, str_repeat('5', 64), 0);
+expect_manipulation('epoch frontier signed by a non-epoch key is rejected', fn() => $wallet_g_live->balance(false));
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

@@ -111,9 +111,12 @@ is a thin front-end over `NanoWallet`. Details in
   link. Work value = BLAKE2b-8(nonce LE ‖ hash) read little-endian, valid when
   ≥ difficulty. Receive/open blocks use the lower threshold
   `fffffe0000000000`; send/change use `fffffff800000000`.
-- Epoch blocks are signed by the network's epoch signer, NOT the account —
-  any signature verification of arbitrary frontiers must special-case links
-  starting with ASCII "epoch" (hex `65706F6368`).
+- Epoch blocks are signed by the network's epoch signer, NOT the account.
+  Verify them against the pinned signer for the EXACT epoch link
+  (`NanoWallet::EPOCH_SIGNERS_LIVE`) — never skip verification because a
+  link merely starts with "epoch". Wallet state checks must fail closed:
+  every block the wallet signs inherits previous/balance/representative
+  from the verified frontier.
 - The crypto is intentionally not constant-time (server-side use); don't
   advertise it for hostile-input timing scenarios.
 - Pure-PHP work generation (`NanoTool::work`) is only practical at low

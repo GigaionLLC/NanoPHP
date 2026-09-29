@@ -36,6 +36,18 @@ class NanoWallet
     // Used when opening an account, changeable afterwards (atto's default)
     const DEFAULT_REPRESENTATIVE = 'nano_11pb5aa6uirs9hoqsg4swnzyehoiqowj94kdpthwkhwufmtd6a11xx35iron';
 
+    // Epoch upgrade blocks (live network): exact link => public key of the
+    // key that must have signed them. From nano-node network_params.cpp:
+    // v1 is signed by the genesis account, v2 by a dedicated signer.
+    const EPOCH_SIGNERS_LIVE = [
+        // "epoch v1 block" (signer = genesis, nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3)
+        '65706F636820763120626C6F636B000000000000000000000000000000000000' =>
+            'E89208DD038FBB269987689621D52292AE9C35941A7484756ECCED92A65093BA',
+        // "epoch v2 block" (signer nano_3qb6o6i1tkzr6jwr5s7eehfxwg9x6eemitdinbpi7u8bjjwsgqfj4wzser3x)
+        '65706F636820763220626C6F636B000000000000000000000000000000000000' =>
+            'DD24A9200D4BF8247981E4AC63DBDE38FD2319386970A26D02ECC98C79975DB1',
+    ];
+
     private $rpc;
     private $workRpc;
     private $privateKey;
@@ -69,6 +81,7 @@ class NanoWallet
         $this->options = array_merge([
             'representative' => self::DEFAULT_REPRESENTATIVE,
             'verify_info'    => true,
+            'epoch_signers'  => self::EPOCH_SIGNERS_LIVE,
             'work_source'    => 'node',
             'work_rpc'       => null
         ], $options);
@@ -171,48 +184,79 @@ class NanoWallet
 
     private function verifyInfo(array $info): void
     {
+        // Fail closed: every check below must pass, otherwise the node's
+        // account_info is not trusted. Blocks the wallet builds take their
+        // previous hash, balance and representative from this state, so an
+        // unverified value would be signed into a network-valid block.
+        $contents = $this->fetchBlockContents($info['frontier']);
+
+        if (($contents['type'] ?? null) !== 'state') {
+            // Pre-2018 block types carry no balance to check. Every live
+            // account has since been epoch-upgraded to a state frontier, so
+            // treat anything else as manipulation rather than skipping checks.
+            throw new NanoWalletException('Account info cannot be verified: frontier is not a state block');
+        }
+
+        // The frontier must be a block of THIS account; a block the attacker
+        // signed for their own account would otherwise pass
+        if (NanoTool::account2public((string) $contents['account']) !== $this->publicKey) {
+            throw new NanoWalletException('Account info has been manipulated: frontier belongs to another account');
+        }
+
+        if (!is_string($contents['balance']) || !ctype_digit($contents['balance'])) {
+            throw new NanoWalletException('Account info has been manipulated: invalid frontier balance');
+        }
+
+        $link = strtoupper((string) $contents['link']);
+        $hash = NanoTool::hashHexs([
+            NanoTool::PREAMBLE_HEX,
+            $this->publicKey,
+            strtoupper((string) $contents['previous']),
+            NanoTool::account2public((string) $contents['representative']),
+            NanoTool::dec2hex($contents['balance'], 16),
+            $link
+        ]);
+
+        if (!hash_equals($info['frontier'], $hash) ||
+            $contents['balance'] !== $info['balance'] ||
+            NanoTool::account2public((string) $contents['representative']) !==
+                NanoTool::account2public((string) $info['representative'])
+        ) {
+            throw new NanoWalletException('Account info has been manipulated: frontier block does not match');
+        }
+
+        // Epoch blocks are signed by the network's epoch signer instead of
+        // the account itself. Only the exact epoch links count, and the
+        // signature must come from that epoch's signer.
+        $signer = $this->options['epoch_signers'][$link] ?? $this->publicKey;
+
+        if (NanoTool::validSign($hash, (string) $contents['signature'], NanoTool::public2account($signer)) === false) {
+            throw new NanoWalletException('Account info has been manipulated: invalid frontier signature');
+        }
+    }
+
+    private function fetchBlockContents(string $hash): array
+    {
         $response = $this->rpc->block_info([
             'json_block' => 'true',
-            'hash'       => $info['frontier']
+            'hash'       => $hash
         ]);
 
         if ($response === false) {
             throw new NanoWalletException("block_info failed: {$this->rpc->error}");
         }
 
-        $contents = $response['contents'];
-
-        if ($contents['type'] != 'state') {
-            // Legacy frontier (pre-2018 account with no state blocks yet):
-            // hashing rules differ per legacy type, skip deep verification
-            return;
+        if (!isset($response['contents']) || !is_array($response['contents'])) {
+            throw new NanoWalletException('Account info cannot be verified: block_info returned no block contents');
         }
 
-        $hash = NanoTool::hashHexs([
-            NanoTool::PREAMBLE_HEX,
-            NanoTool::account2public($contents['account']),
-            strtoupper($contents['previous']),
-            NanoTool::account2public($contents['representative']),
-            NanoTool::dec2hex($contents['balance'], 16),
-            strtoupper($contents['link'])
-        ]);
-
-        if ($hash != $info['frontier'] ||
-            $contents['balance'] != $info['balance'] ||
-            $contents['representative'] != $info['representative']
-        ) {
-            throw new NanoWalletException('Account info has been manipulated: frontier block does not match');
+        foreach (['account', 'previous', 'representative', 'balance', 'link', 'signature'] as $field) {
+            if (($response['contents']['type'] ?? null) === 'state' && !isset($response['contents'][$field])) {
+                throw new NanoWalletException("Account info cannot be verified: frontier block has no $field");
+            }
         }
 
-        // Epoch blocks are signed by the network's epoch signer instead of
-        // the account itself; their link starts with ASCII "epoch"
-        if (strpos(strtoupper($contents['link']), '65706F6368') === 0) {
-            return;
-        }
-
-        if (NanoTool::validSign($hash, $contents['signature'], $contents['account']) === false) {
-            throw new NanoWalletException('Account info has been manipulated: invalid frontier signature');
-        }
+        return $response['contents'];
     }
 
     /**
@@ -237,6 +281,16 @@ class NanoWallet
         // (nano-node issue #3161)
         if (!empty($response['blocks']) && is_array($response['blocks'])) {
             foreach ($response['blocks'] as $hash => $block) {
+                // Skip malformed entries instead of building blocks from them:
+                // the amount becomes part of a signed balance
+                if (!is_string($hash) || strlen($hash) !== 64 || !ctype_xdigit($hash) ||
+                    !is_array($block) || !isset($block['amount']) ||
+                    !is_string($block['amount']) || !ctype_digit($block['amount']) ||
+                    ltrim($block['amount'], '0') === ''
+                ) {
+                    continue;
+                }
+
                 $receivables[] = [
                     'hash'   => strtoupper($hash),
                     'amount' => $block['amount'],
