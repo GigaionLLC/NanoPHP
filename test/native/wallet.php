@@ -40,15 +40,27 @@ function check(string $name, $actual, $expected = true): void
 // *  Spawn the mock node
 // *
 
+// Per-run cache for the mock node's precomputed ledger (see mock-wallet-node.php)
+$mock_ledger_cache = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nanophp-mock-ledger-' . bin2hex(random_bytes(6));
+register_shutdown_function(function () use ($mock_ledger_cache) {
+    @unlink($mock_ledger_cache);
+});
+
 function spawnMockNode(int $port): void
 {
+    global $mock_ledger_cache;
+
     $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+    $env  = getenv();
+    $env['MOCK_LEDGER_CACHE'] = $mock_ledger_cache;
     $mock = proc_open(
         [PHP_BINARY, '-S', "127.0.0.1:$port", __DIR__ . '/mock-wallet-node.php'],
         // Discard the server's request log: an unread pipe fills up and
         // stalls the server once enough requests have been logged
         [1 => ['file', $null, 'w'], 2 => ['file', $null, 'w']],
-        $pipes
+        $pipes,
+        null,
+        $env
     );
 
     if (!is_resource($mock)) {
@@ -92,7 +104,10 @@ check('newSeed is 64 hex chars', strlen($seed) == 64 && ctype_xdigit($seed));
 // *  Account A: opened account with 5 NANO and one 2 NANO receivable
 // *
 
-$wallet = NanoWallet::fromSeed($rpc, str_repeat('0', 64), 0);
+// The mock node only produces real work at a cheap test difficulty
+$cheap_work = ['work_difficulty_send' => 'f000000000000000', 'work_difficulty_receive' => 'f000000000000000'];
+
+$wallet = NanoWallet::fromSeed($rpc, str_repeat('0', 64), 0, $cheap_work);
 
 check('address from zero seed',
     $wallet->address(),
@@ -138,7 +153,7 @@ check('representative updated', $wallet->representative(), $new_rep);
 // *  Account B: unopened account, first receive must open it
 // *
 
-$wallet_b = NanoWallet::fromSeed($rpc, str_repeat('F', 64), 0);
+$wallet_b = NanoWallet::fromSeed($rpc, str_repeat('F', 64), 0, $cheap_work);
 
 check('unopened accountInfo is null', $wallet_b->accountInfo(), null);
 
@@ -354,9 +369,9 @@ check('CLI rejects an amount with a trailing newline cleanly',
 // *
 
 $ext = new \GigaionLLC\NanoPHP\NanoRPCExt('http', '127.0.0.1', $port);
-$ext_x = NanoTool::seed2keys(str_repeat('A', 64), 0, true)[2];
-$ext_y = NanoTool::seed2keys(str_repeat('B', 64), 0, true)[2];
-$ext_z = NanoTool::seed2keys(str_repeat('C', 64), 0, true)[2];
+$ext_x = NanoTool::public2account(str_repeat('A1', 32));
+$ext_y = NanoTool::public2account(str_repeat('B2', 32));
+$ext_z = NanoTool::public2account(str_repeat('C3', 32));
 
 // 10 raw to Y, which is itself in the wallet: X gives 5, Y's 3 are
 // skipped (self send), Z's 2 fail -> only 5 raw actually sent
@@ -386,6 +401,23 @@ check('response cap error message', $rpc_capped->error, 'Response exceeds max_re
 $rpc_uncapped = new NanoRPC('http', '127.0.0.1', $port, null, ['max_response_size' => null]);
 check('max_response_size null disables the cap', $rpc_uncapped->block_count()['count'] ?? null, '42');
 check('default cap accepts normal responses', $rpc->block_count()['count'] ?? null, '42');
+
+
+// *
+// *  Node-supplied work is validated before a block is published
+// *  (default mainnet thresholds: the mock answers with bogus work)
+// *
+
+$wallet_badwork = NanoWallet::fromSeed($rpc, str_repeat('0', 64), 0);
+$badwork_error = null;
+try {
+    $wallet_badwork->send('1', $recipient);
+} catch (NanoWalletException $e) {
+    $badwork_error = $e->getMessage();
+}
+check('invalid node work is refused before publishing',
+    $badwork_error, 'work_generate returned invalid work (not valid for difficulty fffffff800000000)');
+expect_manipulation('invalid work_difficulty option rejected', fn() => NanoWallet::fromSeed($rpc, str_repeat('0', 64), 0, ['work_difficulty_send' => 'fff']));
 
 
 // *

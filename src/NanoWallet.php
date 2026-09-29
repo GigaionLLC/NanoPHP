@@ -70,6 +70,10 @@ class NanoWallet
      *   verify_info        verify account_info against the frontier block (default: true)
      *   work_source        'node', 'local' or 'node_fallback' (default: 'node')
      *   work_rpc           separate NanoRPC instance for work_generate (e.g. a work server)
+     *   work_difficulty_send     threshold for send/change work (default: WORK_SEND)
+     *   work_difficulty_receive  threshold for receive/open work (default: WORK_RECEIVE)
+     *                      (only for networks with other thresholds, e.g. test
+     *                      networks; node-supplied work is checked against them)
      */
     private function __construct(NanoRPC $rpc, #[\SensitiveParameter] string $private_key, array $options = [])
     {
@@ -83,12 +87,22 @@ class NanoWallet
             'verify_info'    => true,
             'epoch_signers'  => self::EPOCH_SIGNERS_LIVE,
             'work_source'    => 'node',
-            'work_rpc'       => null
+            'work_rpc'       => null,
+            'work_difficulty_send'    => self::WORK_SEND,
+            'work_difficulty_receive' => self::WORK_RECEIVE
         ], $options);
 
         $this->workRpc = $this->options['work_rpc'] ?? $rpc;
 
-        if (!in_array($this->options['work_source'], ['node', 'local', 'node_fallback'])) {
+        foreach (['work_difficulty_send', 'work_difficulty_receive'] as $option) {
+            if (!is_string($this->options[$option]) || strlen($this->options[$option]) !== 16 ||
+                !ctype_xdigit($this->options[$option])
+            ) {
+                throw new NanoWalletException("Invalid $option: expected 16 hexadecimal characters");
+            }
+        }
+
+        if (!in_array($this->options['work_source'], ['node', 'local', 'node_fallback'], true)) {
             throw new NanoWalletException("Invalid work source: {$this->options['work_source']}");
         }
         if (!NanoTool::account2public($this->options['representative'], false)) {
@@ -170,7 +184,7 @@ class NanoWallet
         ]);
 
         if ($response === false) {
-            if ($this->rpc->error == 'Account not found') {
+            if ($this->rpc->error === 'Account not found') {
                 $this->info = null;
                 $this->infoFetched = true;
 
@@ -353,7 +367,7 @@ class NanoWallet
 
             if ($this->info === null) {
                 // First block of the account
-                $builder->setWork($this->generateWork($this->publicKey, self::WORK_RECEIVE));
+                $builder->setWork($this->generateWork($this->publicKey, $this->options['work_difficulty_receive']));
                 $block = $builder->open(
                     $receivable['hash'],
                     $receivable['amount'],
@@ -362,7 +376,7 @@ class NanoWallet
                 $balance = $receivable['amount'];
             } else {
                 $builder->setPrev($this->info['frontier'], $this->prevStub());
-                $builder->setWork($this->generateWork($this->info['frontier'], self::WORK_RECEIVE));
+                $builder->setWork($this->generateWork($this->info['frontier'], $this->options['work_difficulty_receive']));
                 $block = $builder->receive($receivable['hash'], $receivable['amount']);
                 $balance = $block['balance'];
             }
@@ -393,7 +407,7 @@ class NanoWallet
      */
     public function send(string $amount, string $recipient, string $denomination = 'NANO'): string
     {
-        if ($denomination == 'raw') {
+        if ($denomination === 'raw') {
             if (!ctype_digit($amount)) {
                 throw new NanoWalletException("Invalid raw amount: $amount");
             }
@@ -417,7 +431,7 @@ class NanoWallet
 
         $builder = new NanoBlock($this->privateKey);
         $builder->setPrev($this->info['frontier'], $this->prevStub());
-        $builder->setWork($this->generateWork($this->info['frontier'], self::WORK_SEND));
+        $builder->setWork($this->generateWork($this->info['frontier'], $this->options['work_difficulty_send']));
         $block = $builder->send($recipient, $raw);
 
         $hash = $this->process($block, 'send', $builder->blockId);
@@ -450,7 +464,7 @@ class NanoWallet
 
         $builder = new NanoBlock($this->privateKey);
         $builder->setPrev($this->info['frontier'], $this->prevStub());
-        $builder->setWork($this->generateWork($this->info['frontier'], self::WORK_SEND));
+        $builder->setWork($this->generateWork($this->info['frontier'], $this->options['work_difficulty_send']));
         $block = $builder->change($representative);
 
         $hash = $this->process($block, 'change', $builder->blockId);
@@ -500,7 +514,16 @@ class NanoWallet
             throw new NanoWalletException("work_generate failed: {$this->workRpc->error}");
         }
 
-        return $response['work'];
+        // Don't publish work the node got wrong: check it locally (cheap)
+        // and fail with a clear message instead of a rejected block
+        $work = $response['work'] ?? null;
+        if (!is_string($work) || strlen($work) !== 16 || !ctype_xdigit($work) ||
+            !NanoTool::validWork($hash, $difficulty, $work)
+        ) {
+            throw new NanoWalletException("work_generate returned invalid work (not valid for difficulty $difficulty)");
+        }
+
+        return $work;
     }
 
     private function generateWorkLocal(string $hash, string $difficulty): string
@@ -551,9 +574,9 @@ class NanoWallet
             throw new NanoWalletException("process failed: {$this->rpc->error}");
         }
 
-        $hash = strtoupper($response['hash'] ?? '');
+        $hash = strtoupper((string) ($response['hash'] ?? ''));
 
-        if ($hash != $expected_hash) {
+        if (!hash_equals($expected_hash, $hash)) {
             throw new NanoWalletException("Node confirmed unexpected block hash: $hash (expected $expected_hash)");
         }
 
