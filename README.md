@@ -234,6 +234,13 @@ $rpc = new NanoRPC('https', 'my-node', 443, null, [
 ]);
 ```
 
+Basic credentials travel in cleartext over plain `http://`, so `nanophp`
+prints a warning when they are sent to a host other than localhost; use
+https for remote nodes. `NanoRPC` does not follow HTTP redirects (Nano RPC
+never needs them). If you opt in with `'follow_location' => true`, it still
+refuses an https-to-http downgrade and drops the `Authorization` header when
+a redirect leads to another host or port.
+
 ---
 
 ## Library examples

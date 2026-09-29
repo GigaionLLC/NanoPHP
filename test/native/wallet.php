@@ -40,37 +40,42 @@ function check(string $name, $actual, $expected = true): void
 // *  Spawn the mock node
 // *
 
-$port = 17077;
-$mock = proc_open(
-    [PHP_BINARY, '-S', "127.0.0.1:$port", __DIR__ . '/mock-wallet-node.php'],
-    [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-    $pipes
-);
+function spawnMockNode(int $port): void
+{
+    $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+    $mock = proc_open(
+        [PHP_BINARY, '-S', "127.0.0.1:$port", __DIR__ . '/mock-wallet-node.php'],
+        // Discard the server's request log: an unread pipe fills up and
+        // stalls the server once enough requests have been logged
+        [1 => ['file', $null, 'w'], 2 => ['file', $null, 'w']],
+        $pipes
+    );
 
-if (!is_resource($mock)) {
-    fwrite(STDERR, "Could not start mock node\n");
-    exit(1);
-}
-
-register_shutdown_function(function () use ($mock) {
-    proc_terminate($mock);
-});
-
-// Wait for the server to accept connections
-$up = false;
-for ($i = 0; $i < 50; $i++) {
-    $socket = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.2);
-    if ($socket) {
-        fclose($socket);
-        $up = true;
-        break;
+    if (!is_resource($mock)) {
+        fwrite(STDERR, "Could not start mock node\n");
+        exit(1);
     }
-    usleep(100000);
-}
-if (!$up) {
+
+    register_shutdown_function(function () use ($mock) {
+        proc_terminate($mock);
+    });
+
+    // Wait for the server to accept connections
+    for ($i = 0; $i < 50; $i++) {
+        $socket = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.2);
+        if ($socket) {
+            fclose($socket);
+            return;
+        }
+        usleep(100000);
+    }
+
     fwrite(STDERR, "Mock node did not come up on port $port\n");
     exit(1);
 }
+
+$port = 17077;
+spawnMockNode($port);
 
 $rpc = new NanoRPC('http', '127.0.0.1', $port);
 
@@ -212,6 +217,48 @@ check('epoch frontier signed by the epoch signer verifies', $wallet_g->balance(f
 // ...and the same block is rejected with the live signers (wrong signer)
 $wallet_g_live = NanoWallet::fromSeed($rpc, str_repeat('5', 64), 0);
 expect_manipulation('epoch frontier signed by a non-epoch key is rejected', fn() => $wallet_g_live->balance(false));
+
+
+// *
+// *  NanoRPC redirects: not followed by default; when opted in, never
+// *  downgraded to http and never carrying credentials to another origin
+// *
+
+$second_port = 17087;
+spawnMockNode($second_port);
+
+$auth    = ['Authorization: Basic ' . base64_encode('rpcuser:dummy-test-pass')];
+$to_same = 'redirect?to=' . rawurlencode('/');
+$to_other = 'redirect?to=' . rawurlencode("http://127.0.0.1:$second_port/");
+
+$rpc_default = new NanoRPC('http', '127.0.0.1', $port, $to_same, ['headers' => $auth]);
+check('redirect not followed by default', $rpc_default->block_count(), false);
+check('unfollowed redirect reports its status', $rpc_default->status, 307);
+
+$rpc_same = new NanoRPC('http', '127.0.0.1', $port, $to_same, ['headers' => $auth, 'follow_location' => true]);
+check('opt-in redirect is followed (same origin, POST kept on 307)', $rpc_same->echo_auth(), [
+    'authorization' => 'Basic ' . base64_encode('rpcuser:dummy-test-pass'),
+    'method'        => 'POST'
+]);
+
+$rpc_cross = new NanoRPC('http', '127.0.0.1', $port, $to_other, ['headers' => $auth, 'follow_location' => true]);
+check('cross-origin redirect drops the Authorization header', $rpc_cross->echo_auth(), [
+    'authorization' => '',
+    'method'        => 'POST'
+]);
+
+$rpc_loop = new NanoRPC('http', '127.0.0.1', $port, $to_same, ['follow_location' => true, 'max_redirects' => 0]);
+$rpc_loop->block_count();
+check('max_redirects is enforced', $rpc_loop->error, 'Too many redirects');
+
+$redirect_allowed = new ReflectionMethod(NanoRPC::class, 'redirectAllowed');
+$resolve_redirect = new ReflectionMethod(NanoRPC::class, 'resolveRedirect');
+check('https -> http redirect refused', $redirect_allowed->invoke(null, 'https://node.example/api', 'http://evil.example/'), false);
+check('https -> https redirect allowed', $redirect_allowed->invoke(null, 'https://node.example/api', 'https://node2.example/'), true);
+check('http -> https redirect allowed', $redirect_allowed->invoke(null, 'http://node.example/api', 'https://node.example/api'), true);
+check('relative redirect resolved', $resolve_redirect->invoke(null, 'https://node.example:8443/a/b', 'c?x=1'), 'https://node.example:8443/a/c?x=1');
+check('protocol-relative redirect keeps scheme', $resolve_redirect->invoke(null, 'https://node.example/a', '//other.example/'), 'https://other.example/');
+check('non-http redirect target rejected', $resolve_redirect->invoke(null, 'http://node.example/', 'file:///etc/passwd'), null);
 
 
 // *

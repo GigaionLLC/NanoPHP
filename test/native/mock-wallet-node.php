@@ -124,6 +124,15 @@ if ($required_auth !== false && $required_auth !== '') {
     }
 }
 
+// Redirect endpoint for NanoRPC redirect tests: /redirect?to=URL[&code=N]
+if (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) === '/redirect') {
+    http_response_code((int) ($_GET['code'] ?? 307));
+    header('Location: ' . ($_GET['to'] ?? '/'));
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Redirected']);
+    exit;
+}
+
 $request = json_decode(file_get_contents('php://input'), true);
 
 header('Content-Type: application/json');
@@ -192,6 +201,18 @@ switch ($request['action'] ?? '') {
             $blocks = ''; // node quirk: "" instead of {} when empty
         }
         echo json_encode(['blocks' => $blocks]);
+        break;
+
+    case 'block_count':
+        echo json_encode(['count' => '42', 'unchecked' => '0', 'cemented' => '42']);
+        break;
+
+    case 'echo_auth':
+        // Reports what reached this server (redirect credential tests)
+        echo json_encode([
+            'authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? '',
+            'method'        => $_SERVER['REQUEST_METHOD'] ?? ''
+        ]);
         break;
 
     case 'work_generate':
