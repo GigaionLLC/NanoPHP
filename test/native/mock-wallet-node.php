@@ -169,6 +169,14 @@ if (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) === '/redirect') {
     exit;
 }
 
+// Hostile node for terminal-injection tests: every answer is an error
+// message carrying ANSI escape sequences
+if (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) === '/evil') {
+    header('Content-Type: application/json');
+    echo json_encode(['error' => "bad\x1b[2J\x1b[31mnode\x07\r\nspoofed line\xc2\x9b31m"]);
+    exit;
+}
+
 $request = json_decode(file_get_contents('php://input'), true);
 
 header('Content-Type: application/json');

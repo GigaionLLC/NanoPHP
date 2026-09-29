@@ -421,6 +421,15 @@ expect_manipulation('invalid work_difficulty option rejected', fn() => NanoWalle
 
 
 // *
+// *  nanophp CLI: control characters from the node never reach the terminal
+// *
+
+[$status, $stdout, $stderr] = runCli(['r'], ['NANOPHP_NODE' => "$mock_url/evil"], $zero_seed);
+check('CLI strips control characters from node errors',
+    [$status, $stderr], [1, "Error: account_info failed: bad[2J[31mnodespoofed line31m\n"]);
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

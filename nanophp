@@ -153,6 +153,18 @@ function fail(string $message): void
 // The user's home directory, or null when HOME/USERPROFILE are unset (cron,
 // some service units, env -i). There is deliberately no fallback to the
 // shared temp directory: another local user could plant a node file there.
+// Node-controlled text (RPC errors, block counts) goes to the terminal only
+// through this: control characters (C0, DEL, UTF-8 encoded C1) are removed
+// so a node can't inject ANSI escape sequences that rewrite the output.
+function printable($value): string
+{
+    if (!is_string($value)) {
+        $value = is_scalar($value) ? (string) $value : (string) json_encode($value);
+    }
+
+    return (string) preg_replace('/[\x00-\x1F\x7F]|\xC2[\x80-\x9F]/', '', $value);
+}
+
 function homeDir(): ?string
 {
     $home = getenv('HOME') ?: getenv('USERPROFILE');
@@ -276,14 +288,14 @@ function autoNode(): void
             $response = $rpc->block_count();
 
             if ($response !== false && isset($response['count'])) {
-                fwrite(STDERR, "online (block height " . $response['count'] . ")\n");
+                fwrite(STDERR, "online (block height " . printable($response['count']) . ")\n");
                 $selected = $endpoint;
                 break;
             }
 
-            fwrite(STDERR, "no (" . ($rpc->error ?: 'unexpected response') . ")\n");
+            fwrite(STDERR, "no (" . printable($rpc->error ?: 'unexpected response') . ")\n");
         } catch (Throwable $e) {
-            fwrite(STDERR, "no (" . $e->getMessage() . ")\n");
+            fwrite(STDERR, "no (" . printable($e->getMessage()) . ")\n");
         }
     }
 
@@ -436,5 +448,5 @@ try {
 } catch (\Throwable $e) {
     // Any error, including PHP's own (ValueError, TypeError): print only
     // the message, never a stack trace with argument values
-    fail('Error: ' . $e->getMessage());
+    fail('Error: ' . printable($e->getMessage()));
 }
