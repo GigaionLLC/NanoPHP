@@ -175,7 +175,9 @@ class NanoRPC
 
         $endpoint = "{$this->protocol}://{$this->hostname}:{$this->port}/{$this->url}";
 
-        if (!$this->httpPost($endpoint, $request)) {
+        [$this->responseRaw, $this->status] = $this->httpPost($endpoint, $request);
+
+        if ($this->responseRaw === false) {
             return false;
         }
 
@@ -265,62 +267,69 @@ class NanoRPC
 
     /**
      * POST $body to $endpoint, following redirects only when the caller
-     * opted in. Sets responseRaw and status; on transport failure sets
-     * error and returns false.
+     * opted in. Returns [response body or false, HTTP status]; on failure
+     * error is set.
+     *
+     * @return array{0: string|false, 1: int}
      */
-    private function httpPost(string $endpoint, string $body): bool
+    private function httpPost(string $endpoint, string $body): array
     {
         $method    = 'POST';
         $headers   = $this->options['headers'];
         $redirects = 0;
 
         while (true) {
-            $response_headers = $this->httpRequest($endpoint, $method, $body, $headers);
+            [$raw, $response_headers] = $this->httpRequest($endpoint, $method, $body, $headers);
 
             // HTTP status (and Location) of this hop
-            $this->status = 0;
-            $location     = null;
+            $status   = 0;
+            $location = null;
             foreach ($response_headers as $header) {
                 if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $match)) {
-                    $this->status = (int) $match[1];
-                    $location     = null;
+                    $status   = (int) $match[1];
+                    $location = null;
                 } elseif (stripos($header, 'Location:') === 0) {
                     $location = trim(substr($header, 9));
                 }
             }
 
-            if ($this->responseRaw === false) {
+            if ($raw === false) {
                 $last_error  = error_get_last();
                 $this->error = $last_error['message'] ?? "Unable to connect to $endpoint";
 
-                return false;
+                return [false, $status];
             }
 
             $max_size = $this->options['max_response_size'];
-            if ($max_size !== null && strlen($this->responseRaw) > (int) $max_size) {
-                $this->responseRaw = false;
-                $this->error       = "Response exceeds max_response_size ($max_size bytes)";
+            if ($max_size !== null && strlen($raw) > (int) $max_size) {
+                $this->error = "Response exceeds max_response_size ($max_size bytes)";
 
-                return false;
+                return [false, $status];
             }
 
             if (!$this->options['follow_location'] ||
-                !in_array($this->status, [301, 302, 303, 307, 308], true) ||
+                !in_array($status, [301, 302, 303, 307, 308], true) ||
                 $location === null || $location === ''
             ) {
-                return true;
+                return [$raw, $status];
             }
 
             if (++$redirects > (int) $this->options['max_redirects']) {
-                return $this->redirectFailure('Too many redirects');
+                $this->error = 'Too many redirects';
+
+                return [false, $status];
             }
 
             $next = self::resolveRedirect($endpoint, $location);
             if ($next === null) {
-                return $this->redirectFailure('Invalid redirect location');
+                $this->error = 'Invalid redirect location';
+
+                return [false, $status];
             }
             if (!self::redirectAllowed($endpoint, $next)) {
-                return $this->redirectFailure('Refusing redirect from https to a non-https location');
+                $this->error = 'Refusing redirect from https to a non-https location';
+
+                return [false, $status];
             }
 
             // Never forward credentials to another origin
@@ -332,7 +341,7 @@ class NanoRPC
 
             // Like PHP's own http wrapper: 307/308 repeat the POST,
             // 301/302/303 continue with a body-less GET
-            if ($this->status !== 307 && $this->status !== 308) {
+            if ($status !== 307 && $status !== 308) {
                 $method = 'GET';
                 $body   = '';
             }
@@ -341,15 +350,11 @@ class NanoRPC
         }
     }
 
-    private function redirectFailure(string $error): bool
-    {
-        $this->error       = $error;
-        $this->responseRaw = false;
-
-        return false;
-    }
-
-    /** One HTTP request without automatic redirects; returns the response headers */
+    /**
+     * One HTTP request without automatic redirects.
+     *
+     * @return array{0: string|false, 1: array} [body or false, response headers]
+     */
     private function httpRequest(string $endpoint, string $method, string $body, array $extra_headers): array
     {
         $headers = '';
@@ -381,13 +386,13 @@ class NanoRPC
         $max_size = $this->options['max_response_size'];
         $max_read = $max_size === null ? null : (int) $max_size + 1;
 
-        $this->responseRaw = @file_get_contents($endpoint, false, $context, 0, $max_read);
+        $raw = @file_get_contents($endpoint, false, $context, 0, $max_read);
 
         if (function_exists('http_get_last_response_headers')) {
-            return http_get_last_response_headers() ?? [];
+            return [$raw, http_get_last_response_headers() ?? []];
         }
 
-        return $http_response_header ?? [];
+        return [$raw, $http_response_header ?? []];
     }
 
     /** scheme://host:port of a URL (lowercased), or '' if unparsable */
