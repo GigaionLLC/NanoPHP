@@ -433,10 +433,21 @@ class NanoTool
     // *  Mnemonic words to master seed (BIP39/44)
     // *
 
-    public static function mnem2mseed(#[\SensitiveParameter] array $words, #[\SensitiveParameter] string $passphrase = ''): string
+    /**
+     * BIP39 seed derivation. By default any sequence of word-list words is
+     * accepted (unchanged behaviour: PBKDF2 does not need a valid checksum).
+     * Pass $verify_checksum = true to also require a valid BIP39 mnemonic
+     * (12/15/18/21/24 words with a matching checksum), so a mistyped but
+     * valid word throws instead of silently deriving a different wallet.
+     */
+    public static function mnem2mseed(#[\SensitiveParameter] array $words, #[\SensitiveParameter] string $passphrase = '', bool $verify_checksum = false): string
     {
         if (count($words) < 1) {
             throw new NanoToolException("Invalid words array count: less than 1");
+        }
+
+        if ($verify_checksum) {
+            self::mnem2hex($words); // throws on a bad count, word or checksum
         }
 
         $bip39_words = self::bip39WordList();

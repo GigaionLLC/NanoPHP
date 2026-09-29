@@ -77,7 +77,7 @@ All-static toolbox translating raw crypto into Nano concepts:
 | Blocks | `hashHexs` (BLAKE2b over concatenated hex fields), `sign`, `validSign` |
 | Work | `work` (CPU generation), `validWork`, `mult2diff`, `diff2mult` |
 | Units | `den2raw`, `raw2den`, `den2den`, `hex2dec`, `dec2hex` (bcmath, exact at 128 bits) |
-| Mnemonics | `mnem2hex`, `hex2mnem` (BIP39 with checksum validation), `mnem2mseed`, `mseed2keys` (BIP44 `m/44'/165'/index'`, SLIP-0010 ed25519) |
+| Mnemonics | `mnem2hex`, `hex2mnem` (BIP39 with checksum validation), `mnem2mseed` (checksum check opt-in via its third argument), `mseed2keys` (BIP44 `m/44'/165'/index'`, SLIP-0010 ed25519) |
 
 The BIP39 English wordlist is bundled at `src/Util/bip39-english.txt`.
 

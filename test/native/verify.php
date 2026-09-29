@@ -294,6 +294,15 @@ check('mnem2mseed BIP39 vector',
     'c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04'
 );
 
+check('mnem2mseed with checksum verification: same result for a valid mnemonic',
+    NanoTool::mnem2mseed($abandon, 'TREZOR', true), NanoTool::mnem2mseed($abandon, 'TREZOR'));
+$abandon_typo = $abandon;
+$abandon_typo[11] = 'above'; // valid word, wrong checksum
+check('mnem2mseed without verification still accepts a checksum typo (unchanged default)',
+    strlen(NanoTool::mnem2mseed($abandon_typo, 'TREZOR')), 128);
+checkThrows('mnem2mseed with verification rejects a checksum typo',
+    fn() => NanoTool::mnem2mseed($abandon_typo, 'TREZOR', true));
+
 $mseed_keys = NanoTool::mseed2keys(NanoTool::mnem2mseed($abandon, 'TREZOR'), 0, true);
 check('mseed2keys derives valid account', NanoTool::account2public($mseed_keys[2]), $mseed_keys[1]);
 
