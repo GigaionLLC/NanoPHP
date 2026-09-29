@@ -28,8 +28,6 @@ on:
 permissions:
   contents: read
   packages: write
-  # lets the weekly run re-enable this workflow (keepalive, see last step)
-  actions: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -82,10 +80,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # GitHub disables scheduled workflows after 60 days without repository
-      # activity; the weekly run re-enables itself to reset that timer
+  # GitHub disables scheduled workflows after 60 days without repository
+  # activity; the weekly run re-enables its own workflow to reset that
+  # timer. Kept in its own job so only this step holds actions: write.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
       - name: Keep weekly schedule alive
-        if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/docker.yml/enable"
