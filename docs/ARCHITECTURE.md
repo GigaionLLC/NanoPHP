@@ -36,7 +36,9 @@ How the pieces of NanoPHP fit together, bottom-up.
 ```
 
 Side classes not in the main flow: `NanoCLI` (wraps the `nano_node` CLI
-binary), `NanoIPC` (node IPC over `stream_socket_client`, optional legacy
+binary; method/option names are validated and every value is shell-escaped,
+but arguments are visible in the process list, so never pass seeds, private
+keys or wallet passwords through it), `NanoIPC` (node IPC over `stream_socket_client`, optional legacy
 FlatBuffers preprocessing), `NanoWS` (node WebSocket subscriptions, built on
 the bundled `Util\WebSocketClient`, an RFC 6455 client over native streams),
 `NanoAPI/*` (generated FlatBuffers message models used by NanoIPC). The

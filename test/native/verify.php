@@ -330,6 +330,28 @@ check('generated work validates', NanoTool::validWork($genesis_pub, '80000000000
 
 
 // *
+// *  NanoCLI: no shell injection through option values or names
+// *  (PHP itself stands in for the nano_node binary)
+// *
+
+$cli = new \GigaionLLC\NanoPHP\NanoCLI(PHP_BINARY);
+$payloads = ['x & echo INJECTED_MARKER', 'x; echo INJECTED_MARKER', 'x | echo INJECTED_MARKER',
+             'x && echo INJECTED_MARKER', '$(echo INJECTED_MARKER)', '`echo INJECTED_MARKER`'];
+$injected = false;
+foreach ($payloads as $payload) {
+    $out = $cli->version(['account' => $payload]);
+    if (strpos(implode("\n", (array) $out) . (string) $cli->error, 'INJECTED_MARKER') !== false) {
+        $injected = true;
+    }
+}
+check('NanoCLI option values cannot inject shell commands', $injected, false);
+check('NanoCLI benign call still runs the binary', is_array($cli->version()) && $cli->status === 0);
+checkThrows('NanoCLI rejects a method name with shell syntax', fn() => $cli->{'version & echo x'}());
+checkThrows('NanoCLI rejects an option name with shell syntax', fn() => $cli->version(['a & echo x' => '1']));
+checkThrows('NanoCLI rejects an option name with a dash', fn() => $cli->version(['--x' => '1']));
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

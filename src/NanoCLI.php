@@ -6,6 +6,19 @@ use \Exception;
 
 class NanoCLIException extends Exception{}
 
+/**
+ * Thin wrapper around the nano_node command line binary.
+ *
+ * Every call runs `<nano_node> --<method> --<key>=<value> ...` through the
+ * shell. The method and option names must be plain identifiers
+ * (lowercase letters, digits, underscores) and every value is passed as a
+ * single shell-escaped argument, so caller data can never inject extra
+ * shell syntax.
+ *
+ * Security note: arguments are visible to other local users (process list,
+ * /proc/<pid>/cmdline) while nano_node runs. Do NOT pass secrets such as
+ * seeds, private keys or wallet passwords through this class.
+ */
 class NanoCLI
 {
     // * Settings
@@ -46,15 +59,9 @@ class NanoCLI
             $params[0] = [];
         }
         
-        $request = ' --' . $method;
+        $command = $this->pathToApp . $this->buildArguments((string) $method, (array) $params[0]);
         
-        if (isset($params[0])) {
-            foreach ($params[0] as $key => $value) {
-                $request .= ' --' . $key . '=' . $value;
-            }
-        }
-        
-        $this->error = exec($this->pathToApp . $request . ' 2>&1', $this->response, $this->status);
+        $this->error = exec($command . ' 2>&1', $this->response, $this->status);
         
         if ($this->status == 0) {
             $this->error = null;
@@ -63,5 +70,38 @@ class NanoCLI
             $this->response = null;
             return false;
         }
+    }
+
+
+    // *
+    // *  Argument building
+    // *
+
+    /**
+     * Build " --method --key=value ..." with validated names and each
+     * value shell-escaped (the resulting argv is unchanged for benign input).
+     */
+    private function buildArguments(string $method, array $options): string
+    {
+        if (!self::validName($method)) {
+            throw new NanoCLIException('Invalid method name (allowed: lowercase letters, digits, underscores)');
+        }
+
+        $request = ' --' . $method;
+
+        foreach ($options as $key => $value) {
+            if (!self::validName((string) $key)) {
+                throw new NanoCLIException('Invalid option name (allowed: lowercase letters, digits, underscores)');
+            }
+
+            $request .= ' --' . $key . '=' . escapeshellarg((string) $value);
+        }
+
+        return $request;
+    }
+
+    private static function validName(string $name): bool
+    {
+        return preg_match('/^[a-z][a-z0-9_]*$/D', $name) === 1;
     }
 }
