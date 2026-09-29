@@ -91,6 +91,10 @@ class Ed25519Blake2b
 
     /**
      * Verify a 64-byte signature against a message and 32-byte public key.
+     *
+     * Public keys and R values of small order (the 8 torsion points, e.g.
+     * the identity) are rejected: with them, S = 0 "signatures" verify for
+     * any message. No real key is ever of small order.
      */
     public static function verify(string $message, string $signature, string $publicKey): bool
     {
@@ -99,13 +103,13 @@ class Ed25519Blake2b
         }
 
         $A = self::decodePoint($publicKey);
-        if ($A === null) {
+        if ($A === null || self::isSmallOrder($A)) {
             return false;
         }
 
         $Renc = substr($signature, 0, 32);
         $R = self::decodePoint($Renc);
-        if ($R === null) {
+        if ($R === null || self::isSmallOrder($R)) {
             return false;
         }
 
@@ -195,6 +199,16 @@ class Ed25519Blake2b
             self::mulmod($f, $g),
             self::mulmod($e, $h),
         ];
+    }
+
+    /** True if 8*P is the identity, i.e. P is one of the 8 small-order points */
+    private static function isSmallOrder(array $p): bool
+    {
+        $q = self::pointDouble(self::pointDouble(self::pointDouble($p)));
+
+        // Identity in projective coordinates: X = 0 and Y = Z
+        return bccomp(self::modp($q[0]), '0') === 0 &&
+               bccomp(self::modp(bcsub($q[1], $q[2])), '0') === 0;
     }
 
     /** Identity element */

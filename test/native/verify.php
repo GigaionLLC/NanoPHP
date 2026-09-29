@@ -426,6 +426,47 @@ checkThrows('string2burn rejects a newline filling character', fn() => NanoTool:
 
 
 // *
+// *  Small-order public keys and R values are rejected (the 8 torsion
+// *  points; with them S = 0 "signs" arbitrary messages)
+// *
+
+$small_order = [
+    '0100000000000000000000000000000000000000000000000000000000000000', // identity
+    'ECFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF7F', // order 2
+    '0000000000000000000000000000000000000000000000000000000000000000', // order 4
+    '0000000000000000000000000000000000000000000000000000000000000080', // order 4
+    '26E8958FC2B227B045C3F489F2EF98F0D5DFAC05D3C63339B13802886D53FC05', // order 8
+    '26E8958FC2B227B045C3F489F2EF98F0D5DFAC05D3C63339B13802886D53FC85', // order 8
+    'C7176A703D4DD84FBA3C0B760D10670F2A2053FA2C39CCC64EC7FD7792AC037A', // order 8
+    'C7176A703D4DD84FBA3C0B760D10670F2A2053FA2C39CCC64EC7FD7792AC03FA', // order 8
+];
+
+// The identity-key forgery from the security review: A = R = identity,
+// S = 0 used to verify for any message
+$identity_account = NanoTool::public2account($small_order[0]);
+$forged_sig = $small_order[0] . str_repeat('0', 64);
+check('identity-key forgery rejected (validSign)',
+    NanoTool::validSign(strtoupper(bin2hex(random_bytes(32))), $forged_sig, $identity_account), false);
+
+$torsion_forgeries = 0;
+$forgery_msg = hex2bin('4E414E4F504850'); // any message
+foreach ($small_order as $a_hex) {
+    foreach ($small_order as $r_hex) {
+        if (Ed25519Blake2b::verify($forgery_msg, hex2bin($r_hex) . str_repeat("\0", 32), hex2bin($a_hex))) {
+            $torsion_forgeries++;
+        }
+    }
+}
+check('no small-order A/R combination verifies with S = 0', $torsion_forgeries, 0);
+
+// A genuine signature by a real key must not be affected
+$real_keys = NanoTool::seed2keys(str_repeat('0', 64), 0, true);
+$real_msg  = str_repeat('AB', 32);
+check('genuine signature still verifies after small-order checks',
+    NanoTool::validSign($real_msg, NanoTool::sign($real_msg, $real_keys[0]), $real_keys[2]), $real_msg);
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {
