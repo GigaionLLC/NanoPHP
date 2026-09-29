@@ -282,7 +282,7 @@ function autoNode(): void
             }
 
             fwrite(STDERR, "no (" . ($rpc->error ?: 'unexpected response') . ")\n");
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             fwrite(STDERR, "no (" . $e->getMessage() . ")\n");
         }
     }
@@ -433,6 +433,8 @@ try {
         default:
             fail(USAGE);
     }
-} catch (Exception $e) {
+} catch (\Throwable $e) {
+    // Any error, including PHP's own (ValueError, TypeError): print only
+    // the message, never a stack trace with argument values
     fail('Error: ' . $e->getMessage());
 }

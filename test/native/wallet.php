@@ -340,6 +340,15 @@ if (PHP_OS_FAMILY !== 'Windows') {
 
 
 // *
+// *  nanophp CLI: errors print one clean line, never a stack trace
+// *
+
+[$status, $stdout, $stderr] = runCli(['-y', 's', "1\n", NanoTool::seed2keys(str_repeat('F', 64), 0, true)[2]], ['NANOPHP_NODE' => $mock_url], $zero_seed);
+check('CLI rejects an amount with a trailing newline cleanly',
+    $status === 1 && strpos($stderr, 'Error: Invalid amount') === 0 && stripos($stdout . $stderr, 'stack trace') === false);
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

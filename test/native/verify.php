@@ -406,6 +406,26 @@ check('NanoWallet dump still shows the account', strpos($dumps, $dump_wallet->ad
 
 
 // *
+// *  Trailing newlines are invalid input, rejected with a clean exception
+// *  ("$" in a regex also matches before a final "\n")
+// *
+
+foreach (["1\n", "0.1\n", ".5\n", "1\n\n"] as $newline_amount) {
+    $caught = null;
+    try {
+        NanoTool::den2raw($newline_amount, 'NANO');
+    } catch (\Throwable $e) {
+        $caught = get_class($e);
+    }
+    check('den2raw rejects ' . json_encode($newline_amount) . ' with NanoToolException', $caught, \GigaionLLC\NanoPHP\NanoToolException::class);
+}
+check('account2public rejects a trailing newline',
+    NanoTool::account2public(substr($keys[2], 0, 64) . "\n"), false);
+checkThrows('string2burn rejects a trailing newline', fn() => NanoTool::string2burn("nanophp\n"));
+checkThrows('string2burn rejects a newline filling character', fn() => NanoTool::string2burn('nanophp', '1', "1\n"));
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

@@ -136,7 +136,8 @@ class NanoTool
         // Strict, non-negative decimal: "5", "5.", ".5", "5.5" — but never
         // empty, "-1", "1e3", "1.2.3" or other garbage. A money path must
         // reject ambiguous input rather than guess.
-        if (!preg_match('/^(?:\d+\.?\d*|\.\d+)$/', $amount)) {
+        // (\z, not $: "$" would also match before a trailing newline)
+        if (!preg_match('/^(?:\d+\.?\d*|\.\d+)\z/', $amount)) {
             throw new NanoToolException("Invalid amount: $amount");
         }
 
@@ -225,7 +226,7 @@ class NanoTool
         ) {
             $crop = explode('_', $account)[1];
 
-            if (preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/', $crop)) {
+            if (preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/D', $crop)) {
                 $public_key = self::base32Decode(substr($crop, 0, 52), 32);
                 $checksum   = self::base32Decode(substr($crop, 52, 8), 5);
 
@@ -280,13 +281,13 @@ class NanoTool
 
     public static function string2burn(string $string, string $leading_char = '1', string $filling_char = '1'): string
     {
-        if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/', $string) || strlen($string) < 1 || strlen($string) > 51) {
+        if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]+$/D', $string) || strlen($string) < 1 || strlen($string) > 51) {
             throw new NanoToolException("Invalid string: $string");
         }
         if ($leading_char != '1' && $leading_char != '3') {
             throw new NanoToolException("Invalid leading character: $leading_char");
         }
-        if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]$/', $filling_char)) {
+        if (!preg_match('/^[13456789abcdefghijkmnopqrstuwxyz]$/D', $filling_char)) {
             throw new NanoToolException("Invalid filling character: $filling_char");
         }
 
