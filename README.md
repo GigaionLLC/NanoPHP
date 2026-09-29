@@ -13,7 +13,7 @@ This is the **[GigaionLLC fork](https://github.com/GigaionLLC/NanoPHP)** of the
 archived [MikeRow/NanoPHP](https://github.com/MikeRow/NanoPHP). It is a **heavy
 rewrite** rather than a light patch: the cryptography, wallet, RPC/WebSocket
 transports, tests, and documentation have been substantially rewritten and
-modernized for PHP 8.1–8.5, and extended with the wallet capabilities of the
+modernized for PHP 8.2–8.5, and extended with the wallet capabilities of the
 [atto](https://github.com/codesoap/atto) Go client.
 
 > **⚠️ Test before you trust it.** Because this is a heavy rewrite — and because
@@ -46,7 +46,7 @@ Same guarantees as atto:
 
 ## Requirements
 
-- 64-bit PHP 8.1+ (tested up to 8.5) with the `bcmath` extension
+- 64-bit PHP 8.2+ (tested up to 8.5) with the `bcmath` extension
 - optional: `openssl` extension, only for RPC over https / WebSocket over wss
 
 ---

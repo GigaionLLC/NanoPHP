@@ -30,7 +30,7 @@
 	},
 	"minimum-stability" : "stable",
 	"require" : {
-		"php-64bit" : "^8.1",
+		"php-64bit" : "^8.2",
 		"ext-bcmath" : "*"
 	},
 	"suggest" : {
