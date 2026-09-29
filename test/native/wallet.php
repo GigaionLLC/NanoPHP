@@ -349,6 +349,34 @@ check('CLI rejects an amount with a trailing newline cleanly',
 
 
 // *
+// *  NanoRPCExt wallet_send / wallet_sweep accounting (node wallet
+// *  EXTWALLET on the mock: X 5 raw, Y 3 raw, Z 4 raw; sends from Z fail)
+// *
+
+$ext = new \GigaionLLC\NanoPHP\NanoRPCExt('http', '127.0.0.1', $port);
+$ext_x = NanoTool::seed2keys(str_repeat('A', 64), 0, true)[2];
+$ext_y = NanoTool::seed2keys(str_repeat('B', 64), 0, true)[2];
+$ext_z = NanoTool::seed2keys(str_repeat('C', 64), 0, true)[2];
+
+// 10 raw to Y, which is itself in the wallet: X gives 5, Y's 3 are
+// skipped (self send), Z's 2 fail -> only 5 raw actually sent
+$result = $ext->wallet_send(['wallet' => 'EXTWALLET', 'destination' => $ext_y, 'amount' => '10']);
+check('wallet_send: successful send reported with its amount',
+    $result['balances'][$ext_x] ?? null, ['block' => str_repeat('AB', 32), 'amount' => '5']);
+check('wallet_send: self send reports the skipped account\'s share',
+    $result['balances'][$ext_y] ?? null, ['notice' => 'Skipped self send', 'amount' => '3']);
+check('wallet_send: failed send (node error) is reported as an error',
+    [$result['balances'][$ext_z]['error'] ?? null, $result['balances'][$ext_z]['amount'] ?? null, $result['balances'][$ext_z]['reason'] ?? null],
+    ['Bad send', '2', 'Insufficient balance']);
+check('wallet_send: sent total and shortfall surfaced', [$result['sent'] ?? null, $result['shortfall'] ?? null], ['5', '5']);
+
+$result = $ext->wallet_sweep(['wallet' => 'EXTWALLET', 'destination' => $ext_y]);
+check('wallet_sweep: successful send', $result['balances'][$ext_x] ?? null, ['block' => str_repeat('AB', 32), 'amount' => '5']);
+check('wallet_sweep: failed send is an error', $result['balances'][$ext_z]['error'] ?? null, 'Bad send');
+check('wallet_sweep: sent total', $result['sent'] ?? null, '5');
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

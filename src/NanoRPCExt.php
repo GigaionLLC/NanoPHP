@@ -48,16 +48,21 @@ class NanoRPCExt extends NanoRPC
         
         //
         
-        $return = ['balances' => []];
-        
+        $return = ['balances' => [], 'sent' => '0'];
+
         // Get wallet balances
         $args = [
             'wallet'    => $wallet,
             'threshold' => 1
         ];
-        
+
         $wallet_balances = $this->wallet_balances($args);
-        
+
+        if ($wallet_balances === false || !isset($wallet_balances['balances']) || !is_array($wallet_balances['balances'])) {
+            $this->error = 'Unable to get wallet balances';
+            return false;
+        }
+
         // Sort balances
         if ($sort == 'asc') {
             uasort($wallet_balances['balances'], function ($a, $b) {
@@ -73,38 +78,21 @@ class NanoRPCExt extends NanoRPC
         
         // Sweep wallet
         foreach ($wallet_balances['balances'] as $account => $balances) {
-            if ($account == $destination) {
+            if ((string) $account === (string) $destination) {
                 $return['balances'][$account] = [
                     'notice' => 'Skipped self send',
                     'amount' => $balances['balance']
                 ];
                 continue;
             }
-            
-            $args = [
-                'wallet'      => $wallet,
-                'source'      => $account,
-                'destination' => $destination,
-                'amount'      => $balances['balance'],
-                'id'          => uniqid()
-            ];
-            
-            $send = $this->send($args);
-            
-            // Send
-            $return['balances'][$account] = [
-                'block'  => $send['block'],
-                'amount' => $balances['balance']
-            ];
-            
-            if ($send['block'] == NanoTool::EMPTY32_HEX) {
-                $return['balances'][$account] = [
-                    'error'  => 'Bad send',
-                    'amount' => $balances['balance']
-                ];
+
+            $return['balances'][$account] = $this->sendFromAccount($wallet, (string) $account, $destination, $balances['balance']);
+
+            if (isset($return['balances'][$account]['block'])) {
+                $return['sent'] = bcadd($return['sent'], $balances['balance']);
             }
         }
-        
+
         $this->responseRaw = json_encode($return);
         $this->response    = $return;
         
@@ -171,15 +159,21 @@ class NanoRPCExt extends NanoRPC
         $return            = ['balances' => []];
         $selected_accounts = [];
         $amount_left       = $amount;
-        
+        $sent              = '0';
+
         // Get wallet balances
         $args = [
             'wallet'    => $wallet,
             'threshold' => 1
         ];
-        
+
         $wallet_balances = $this->wallet_balances($args);
-            
+
+        if ($wallet_balances === false || !isset($wallet_balances['balances']) || !is_array($wallet_balances['balances'])) {
+            $this->error = 'Unable to get wallet balances';
+            return false;
+        }
+
         // Sort balances
         if ($sort == 'asc') {
             uasort($wallet_balances['balances'], function ($a, $b) {
@@ -208,40 +202,29 @@ class NanoRPCExt extends NanoRPC
             }
         }
 
-        // Send from selected accounts
+        // Send from selected accounts. 'amount' is what this account was
+        // selected to contribute (not its whole balance).
         foreach ($selected_accounts as $account => $balance) {
-            if ($account == $destination) {
+            if ((string) $account === (string) $destination) {
                 $return['balances'][$account] = [
                     'notice' => 'Skipped self send',
-                    'amount' => $balances['balance']
+                    'amount' => $balance
                 ];
                 continue;
             }
-            
-            $args = [
-                'wallet'      => $wallet,
-                'source'      => $account,
-                'destination' => $destination,
-                'amount'      => $balance,
-                'id'          => uniqid()
-            ];
-            
-            $send = $this->send($args);
 
-            // Send
-            $return['balances'][$account] = [
-                'block'  => $send['block'],
-                'amount' => $balances['balance']
-            ];
-            
-            if ($send['block'] == NanoTool::EMPTY32_HEX) {
-                $return['balances'][$account] = [
-                    'error'  => 'Bad send',
-                    'amount' => $balances['balance']
-                ];
+            $return['balances'][$account] = $this->sendFromAccount($wallet, (string) $account, $destination, $balance);
+
+            if (isset($return['balances'][$account]['block'])) {
+                $sent = bcadd($sent, $balance);
             }
         }
-        
+
+        // Surface anything not sent: skipped self send, failed sends, or
+        // wallet balances that fell short of the requested amount
+        $return['sent']      = $sent;
+        $return['shortfall'] = bcsub($amount, $sent);
+
         $this->responseRaw = json_encode($return);
         $this->response    = $return;
         
@@ -249,6 +232,47 @@ class NanoRPCExt extends NanoRPC
     }
     
      
+    // *
+    // *  One send for wallet_send / wallet_sweep
+    // *
+
+    /**
+     * Returns ['block' => hash, 'amount' => raw] on success, or
+     * ['error' => ..., 'amount' => raw] when the node reports an error or
+     * returns no (or an empty) block hash.
+     */
+    private function sendFromAccount(string $wallet, string $account, string $destination, string $amount): array
+    {
+        $send = $this->send([
+            'wallet'      => $wallet,
+            'source'      => $account,
+            'destination' => $destination,
+            'amount'      => $amount,
+            // Idempotency id: random, not time-based like uniqid()
+            'id'          => bin2hex(random_bytes(16))
+        ]);
+
+        if ($send === false || empty($send['block']) || !is_string($send['block']) ||
+            $send['block'] === NanoTool::EMPTY32_HEX
+        ) {
+            $failure = [
+                'error'  => 'Bad send',
+                'amount' => $amount
+            ];
+            if ($this->error) {
+                $failure['reason'] = is_string($this->error) ? $this->error : (string) json_encode($this->error);
+            }
+
+            return $failure;
+        }
+
+        return [
+            'block'  => $send['block'],
+            'amount' => $amount
+        ];
+    }
+
+
     // *
     // *  Wallet weight
     // *

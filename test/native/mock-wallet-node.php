@@ -86,6 +86,12 @@ $foreign_signed_f = mock_state_block($keys_f, str_repeat('F0', 32), bcmul('50000
 
 $epoch_g = mock_state_block($keys_g, str_repeat('A0', 32), bcmul('3', NANO_RAW), EPOCH_V2_LINK, $keys_epoch[0]);
 
+$ext_accounts = [
+    'x' => NanoTool::seed2keys(str_repeat('A', 64), 0, true)[2],
+    'y' => NanoTool::seed2keys(str_repeat('B', 64), 0, true)[2],
+    'z' => NanoTool::seed2keys(str_repeat('C', 64), 0, true)[2],
+];
+
 // account => [account_info response, frontier block contents]
 $scenarios = [
     $keys_d[2] => [
@@ -213,6 +219,35 @@ switch ($request['action'] ?? '') {
             'authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? '',
             'method'        => $_SERVER['REQUEST_METHOD'] ?? ''
         ]);
+        break;
+
+    // Node wallet "EXTWALLET" for NanoRPCExt wallet_send / wallet_sweep
+    // tests: X has 5 raw, Y 3 raw, Z 4 raw; sends from Z fail, and every
+    // send must carry a 128-bit random hex idempotency id
+    case 'wallet_info':
+        if (($request['wallet'] ?? '') === 'EXTWALLET') {
+            echo json_encode(['balance' => '12', 'pending' => '0', 'receivable' => '0', 'accounts_count' => '3']);
+        } else {
+            echo json_encode(['error' => 'Wallet not found']);
+        }
+        break;
+
+    case 'wallet_balances':
+        echo json_encode(['balances' => [
+            $ext_accounts['x'] => ['balance' => '5', 'pending' => '0', 'receivable' => '0'],
+            $ext_accounts['y'] => ['balance' => '3', 'pending' => '0', 'receivable' => '0'],
+            $ext_accounts['z'] => ['balance' => '4', 'pending' => '0', 'receivable' => '0'],
+        ]]);
+        break;
+
+    case 'send':
+        if (!preg_match('/^[0-9a-f]{32}$/D', (string) ($request['id'] ?? ''))) {
+            echo json_encode(['error' => 'Bad id']);
+        } elseif (($request['source'] ?? '') === $ext_accounts['z']) {
+            echo json_encode(['error' => 'Insufficient balance']);
+        } else {
+            echo json_encode(['block' => str_repeat('AB', 32)]);
+        }
         break;
 
     case 'work_generate':
