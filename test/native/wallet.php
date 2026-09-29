@@ -262,6 +262,84 @@ check('non-http redirect target rejected', $resolve_redirect->invoke(null, 'http
 
 
 // *
+// *  nanophp CLI: which saved-node file is trusted
+// *  (child processes with a controlled environment; the zero seed is the
+// *  public test vector account A that the mock node serves)
+// *
+
+function runCli(array $args, array $env, string $stdin): array
+{
+    // Keep what PHP needs to start and open sockets, drop everything else
+    foreach (['PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC'] as $name) {
+        if (getenv($name) !== false && !isset($env[$name])) {
+            $env[$name] = getenv($name);
+        }
+    }
+
+    $process = proc_open(
+        array_merge([PHP_BINARY, dirname(__DIR__, 2) . '/nanophp'], $args),
+        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+        $pipes,
+        null,
+        $env
+    );
+    fwrite($pipes[0], $stdin);
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $status = proc_close($process);
+
+    return [$status, $stdout, $stderr];
+}
+
+$cli_dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nanophp-cli-test-' . bin2hex(random_bytes(6));
+$cli_tmp = $cli_dir . DIRECTORY_SEPARATOR . 'tmp';
+$cli_home = $cli_dir . DIRECTORY_SEPARATOR . 'home';
+mkdir($cli_tmp, 0700, true);
+mkdir($cli_home, 0700, true);
+register_shutdown_function(function () use ($cli_dir, $cli_tmp, $cli_home) {
+    @unlink($cli_tmp . DIRECTORY_SEPARATOR . '.nanophp-node');
+    @unlink($cli_home . DIRECTORY_SEPARATOR . '.nanophp-node');
+    @rmdir($cli_tmp);
+    @rmdir($cli_home);
+    @rmdir($cli_dir);
+});
+
+$zero_seed = str_repeat('0', 64) . "\n";
+$mock_url  = "http://127.0.0.1:$port";
+$no_node   = 'http://127.0.0.1:1'; // nothing listens here
+
+// Without HOME/USERPROFILE a node file planted in the (shared) temp dir must
+// be ignored; the CLI falls back to localhost:7076
+file_put_contents($cli_tmp . DIRECTORY_SEPARATOR . '.nanophp-node', "$mock_url\n");
+[$status, $stdout] = runCli(['r'], ['TMPDIR' => $cli_tmp, 'TEMP' => $cli_tmp, 'TMP' => $cli_tmp], $zero_seed);
+check('CLI without HOME ignores a node file in the temp dir', strpos($stdout, NanoWallet::DEFAULT_REPRESENTATIVE), false);
+
+// NANOPHP_NODE still works without a home directory
+[$status, $stdout] = runCli(['r'], ['TMPDIR' => $cli_tmp, 'TEMP' => $cli_tmp, 'TMP' => $cli_tmp, 'NANOPHP_NODE' => $mock_url], $zero_seed);
+check('CLI without HOME uses NANOPHP_NODE', trim($stdout), NanoWallet::DEFAULT_REPRESENTATIVE);
+
+// The saved node in the user's own home directory is used
+$home_env = ['HOME' => $cli_home, 'USERPROFILE' => $cli_home];
+file_put_contents($cli_home . DIRECTORY_SEPARATOR . '.nanophp-node', "$mock_url\n");
+@chmod($cli_home . DIRECTORY_SEPARATOR . '.nanophp-node', 0644);
+[$status, $stdout] = runCli(['r'], $home_env, $zero_seed);
+check('CLI uses the node saved in the home directory', trim($stdout), NanoWallet::DEFAULT_REPRESENTATIVE);
+
+if (PHP_OS_FAMILY !== 'Windows') {
+    // ...but not when others could have rewritten it
+    chmod($cli_home . DIRECTORY_SEPARATOR . '.nanophp-node', 0666);
+    [$status, $stdout, $stderr] = runCli(['r'], $home_env, $zero_seed);
+    check('CLI ignores a world-writable saved node file', strpos($stdout, NanoWallet::DEFAULT_REPRESENTATIVE) === false && strpos($stderr, 'ignoring') !== false);
+    chmod($cli_home . DIRECTORY_SEPARATOR . '.nanophp-node', 0620);
+    [$status, $stdout] = runCli(['r'], $home_env, $zero_seed);
+    check('CLI ignores a group-writable saved node file', strpos($stdout, NanoWallet::DEFAULT_REPRESENTATIVE), false);
+}
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

@@ -199,8 +199,11 @@ To also export it into your current shell session:
 If a node is unreachable it prints `no (reason)` and moves to the next one.
 Later commands simply read the saved choice from `~/.nanophp-node` — they
 never probe. Node selection precedence is: the `NANOPHP_NODE` environment
-variable, then the saved node, then localhost. So you can always override
-per-shell:
+variable, then the saved node, then localhost. The saved file is skipped
+when there is no home directory (`HOME`/`USERPROFILE` unset, e.g. under
+cron) and, on Linux/macOS, when it isn't owned by you or is writable by
+group/others, because whoever controls it picks the node your wallet
+trusts. So you can always override per-shell:
 
 ```sh
 export NANOPHP_NODE=http://my-node:7076      # POSIX shells
