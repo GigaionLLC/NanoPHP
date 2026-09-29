@@ -22,8 +22,8 @@ The image's entrypoint is the `nanophp` CLI, so subcommands map directly.
 Use `-i` whenever a command reads the seed from standard input:
 
 ```sh
-# Generate a seed (keep it safe!)
-docker run --rm ghcr.io/gigaionllc/nanophp new > seed.txt
+# Generate a seed (keep it safe! umask 077 makes the file owner-only)
+(umask 077; docker run --rm ghcr.io/gigaionllc/nanophp new > seed.txt)
 
 # Derive the address
 docker run --rm -i ghcr.io/gigaionllc/nanophp address < seed.txt

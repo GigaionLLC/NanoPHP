@@ -148,6 +148,18 @@ nano_3mkgs5khhaw36gdik1wj57q4nctaajfttmw1ngr4smn49m39fz5ux7ofsrya
 to only do that part). `-a` selects the account index, `-y` skips the send
 confirmation, `representative NEW_REP` changes the representative.
 
+**Protect the seed file:** whoever can read it controls the funds. With the
+usual umask of 022, `> seed.txt` and `tee seed.txt` create it readable by
+every local user (mode 0644). Create it private instead, or fix it right
+away:
+
+```sh
+(umask 077; php nanophp new > seed.txt)   # created as 0600
+chmod 600 seed.txt                        # for an existing file
+```
+
+On Windows, keep it inside your user profile rather than a shared folder.
+
 ### PowerShell
 
 PowerShell has no `<` input-redirection operator, so pipe the seed in with

@@ -17,7 +17,7 @@
  *
  * Like atto, every subcommand except `new` and `node` expects a seed as the
  * first line of standard input:
- *   php nanophp new > seed.txt
+ *   (umask 077; php nanophp new > seed.txt)   # keep the seed file private
  *   php nanophp address < seed.txt
  *
  * The node subcommand probes a built-in list of public RPC nodes, reports
