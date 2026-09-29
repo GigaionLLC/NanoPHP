@@ -55,7 +55,7 @@ class Ed25519Blake2b
      * Derive the public key from a 32-byte private key (Nano style:
      * the private key is hashed with BLAKE2b-512, then clamped).
      */
-    public static function publicKey(string $privateKey): string
+    public static function publicKey(#[\SensitiveParameter] string $privateKey): string
     {
         if (strlen($privateKey) != 32) {
             throw new Ed25519Blake2bException('Private key must be 32 bytes');
@@ -70,7 +70,7 @@ class Ed25519Blake2b
     /**
      * Sign a message. Returns the 64-byte signature (R || S).
      */
-    public static function sign(string $message, string $privateKey): string
+    public static function sign(string $message, #[\SensitiveParameter] string $privateKey): string
     {
         if (strlen($privateKey) != 32) {
             throw new Ed25519Blake2bException('Private key must be 32 bytes');
@@ -207,7 +207,7 @@ class Ed25519Blake2b
      * Scalar multiplication k*P, double-and-add (MSB first).
      * $k is a decimal string scalar.
      */
-    private static function scalarMult(string $k, array $p): array
+    private static function scalarMult(#[\SensitiveParameter] string $k, array $p): array
     {
         $bits = self::numToBits($k);
         $q = self::pointZero();
@@ -222,7 +222,7 @@ class Ed25519Blake2b
         return $q;
     }
 
-    private static function scalarMultBase(string $k): array
+    private static function scalarMultBase(#[\SensitiveParameter] string $k): array
     {
         return self::scalarMult($k, [self::BX, self::BY, '1', self::mulmod(self::BX, self::BY)]);
     }
@@ -292,7 +292,7 @@ class Ed25519Blake2b
     // *
 
     /** 32-byte little-endian to decimal string */
-    private static function bytesToNum(string $bytes): string
+    private static function bytesToNum(#[\SensitiveParameter] string $bytes): string
     {
         $hex = bin2hex(strrev($bytes));
         $num = '0';
@@ -305,7 +305,7 @@ class Ed25519Blake2b
     }
 
     /** Decimal string to fixed-size little-endian bytes */
-    private static function numToBytes(string $num, int $size): string
+    private static function numToBytes(#[\SensitiveParameter] string $num, int $size): string
     {
         $bytes = '';
         for ($i = 0; $i < $size; $i++) {
@@ -319,7 +319,7 @@ class Ed25519Blake2b
     }
 
     /** Decimal string to bit array, MSB first */
-    private static function numToBits(string $num): array
+    private static function numToBits(#[\SensitiveParameter] string $num): array
     {
         $bits = [];
         while (bccomp($num, '0') > 0) {
@@ -330,7 +330,7 @@ class Ed25519Blake2b
     }
 
     /** Apply Ed25519 clamping to the lower 32 bytes of the secret hash */
-    private static function clamp(string $bytes): string
+    private static function clamp(#[\SensitiveParameter] string $bytes): string
     {
         $bytes[0]  = chr(ord($bytes[0]) & 248);
         $bytes[31] = chr((ord($bytes[31]) & 127) | 64);

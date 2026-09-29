@@ -103,10 +103,10 @@ class NanoRPC
     // *  Set Nano API key
     // *
 
-    public function setNanoApiKey(string $nano_api_key)
+    public function setNanoApiKey(#[\SensitiveParameter] string $nano_api_key)
     {
         if (empty($nano_api_key)) {
-            throw new NanoRPCException("Invalid Nano API key: $nano_api_key");
+            throw new NanoRPCException("Invalid Nano API key: empty");
         }
 
         $this->nanoApiKey = (string) $nano_api_key;

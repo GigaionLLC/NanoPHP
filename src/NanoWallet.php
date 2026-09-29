@@ -71,7 +71,7 @@ class NanoWallet
      *   work_source        'node', 'local' or 'node_fallback' (default: 'node')
      *   work_rpc           separate NanoRPC instance for work_generate (e.g. a work server)
      */
-    private function __construct(NanoRPC $rpc, string $private_key, array $options = [])
+    private function __construct(NanoRPC $rpc, #[\SensitiveParameter] string $private_key, array $options = [])
     {
         $this->rpc        = $rpc;
         $this->privateKey = strtoupper($private_key);
@@ -96,16 +96,30 @@ class NanoWallet
         }
     }
 
-    public static function fromSeed(NanoRPC $rpc, string $seed, int $index = 0, array $options = []): self
+    public static function fromSeed(NanoRPC $rpc, #[\SensitiveParameter] string $seed, int $index = 0, array $options = []): self
     {
         $keys = NanoTool::seed2keys($seed, $index);
 
         return new self($rpc, $keys[0], $options);
     }
 
-    public static function fromPrivateKey(NanoRPC $rpc, string $private_key, array $options = []): self
+    public static function fromPrivateKey(NanoRPC $rpc, #[\SensitiveParameter] string $private_key, array $options = []): self
     {
         return new self($rpc, $private_key, $options);
+    }
+
+    /**
+     * var_dump()/print_r() view without the private key (M3). PHP cannot
+     * wipe strings from memory, so keep wallet objects short-lived and
+     * never serialize, var_export or cache them.
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'account'   => $this->account,
+            'publicKey' => $this->publicKey,
+            'info'      => $this->info
+        ];
     }
 
     /** Generate a new random 64-character hexadecimal seed */

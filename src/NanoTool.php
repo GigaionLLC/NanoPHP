@@ -247,10 +247,11 @@ class NanoTool
     // *  Public key to account
     // *
 
-    public static function public2account(string $public_key): string
+    public static function public2account(#[\SensitiveParameter] string $public_key): string
     {
         if (!self::isHex($public_key, 64)) {
-            throw new NanoToolException("Invalid public key: $public_key");
+            // Value omitted: a private key passed here by mistake must not leak
+            throw new NanoToolException("Invalid public key (expected 64 hexadecimal characters)");
         }
 
         $public_key = hex2bin($public_key);
@@ -263,10 +264,10 @@ class NanoTool
     // *  Private key to public key
     // *
 
-    public static function private2public(string $private_key): string
+    public static function private2public(#[\SensitiveParameter] string $private_key): string
     {
         if (!self::isHex($private_key, 64)) {
-            throw new NanoToolException("Invalid private key: $private_key");
+            throw new NanoToolException("Invalid private key (expected 64 hexadecimal characters)");
         }
 
         return strtoupper(bin2hex(Ed25519Blake2b::publicKey(hex2bin($private_key))));
@@ -323,10 +324,10 @@ class NanoTool
     // *  Seed to keypair (Blake2b)
     // *
 
-    public static function seed2keys(string $seed, int $index = 0, bool $get_account = false): array
+    public static function seed2keys(#[\SensitiveParameter] string $seed, int $index = 0, bool $get_account = false): array
     {
         if (!self::isHex($seed, 64)) {
-            throw new NanoToolException("Invalid seed: $seed");
+            throw new NanoToolException("Invalid seed (expected 64 hexadecimal characters)");
         }
         if ($index < 0 || $index > 4294967295) {
             throw new NanoToolException("Invalid index: $index");
@@ -351,7 +352,7 @@ class NanoTool
     // *  Mnemonic words to hexadecimal string (BIP39)
     // *
 
-    public static function mnem2hex(array $words): string
+    public static function mnem2hex(#[\SensitiveParameter] array $words): string
     {
         $mnem_count = count($words);
 
@@ -367,10 +368,10 @@ class NanoTool
         $bip39_words = self::bip39WordList();
         $bits = '';
 
-        foreach ($words as $word) {
+        foreach (array_values($words) as $position => $word) {
             $index = array_search($word, $bip39_words);
             if ($index === false) {
-                throw new NanoToolException("Invalid mnemonic word: $word");
+                throw new NanoToolException('Invalid mnemonic word at position ' . ($position + 1));
             }
 
             $bits .= str_pad(decbin($index), 11, '0', STR_PAD_LEFT);
@@ -395,7 +396,7 @@ class NanoTool
     // *  Hexadecimal string to mnemonic words (BIP39)
     // *
 
-    public static function hex2mnem(string $hex): array
+    public static function hex2mnem(#[\SensitiveParameter] string $hex): array
     {
         $hex_length = strlen($hex);
 
@@ -406,7 +407,7 @@ class NanoTool
              $hex_length != 64) ||
             !self::isHex($hex)
         ) {
-            throw new NanoToolException("Invalid hexadecimal string: $hex");
+            throw new NanoToolException("Invalid hexadecimal string (expected 32, 40, 48, 56 or 64 hexadecimal characters)");
         }
 
         $bip39_words = self::bip39WordList();
@@ -431,7 +432,7 @@ class NanoTool
     // *  Mnemonic words to master seed (BIP39/44)
     // *
 
-    public static function mnem2mseed(array $words, string $passphrase = ''): string
+    public static function mnem2mseed(#[\SensitiveParameter] array $words, #[\SensitiveParameter] string $passphrase = ''): string
     {
         if (count($words) < 1) {
             throw new NanoToolException("Invalid words array count: less than 1");
@@ -439,9 +440,9 @@ class NanoTool
 
         $bip39_words = self::bip39WordList();
 
-        foreach ($words as $word) {
+        foreach (array_values($words) as $position => $word) {
             if (array_search($word, $bip39_words) === false) {
-                throw new NanoToolException("Invalid mnemonic word: $word");
+                throw new NanoToolException('Invalid mnemonic word at position ' . ($position + 1));
             }
         }
 
@@ -455,10 +456,10 @@ class NanoTool
     // *  Master seed to keypair (BIP39/44)
     // *
 
-    public static function mseed2keys(string $mseed, int $index = 0, bool $get_account = false): array
+    public static function mseed2keys(#[\SensitiveParameter] string $mseed, int $index = 0, bool $get_account = false): array
     {
         if (!self::isHex($mseed, 128)) {
-            throw new NanoToolException("Invalid master seed: $mseed");
+            throw new NanoToolException("Invalid master seed (expected 128 hexadecimal characters)");
         }
         if ($index < 0 || $index > 4294967295) {
             throw new NanoToolException("Invalid index: $index");
@@ -522,13 +523,13 @@ class NanoTool
     // *  Sign message
     // *
 
-    public static function sign(string $msg, string $private_key): string
+    public static function sign(string $msg, #[\SensitiveParameter] string $private_key): string
     {
         if (!self::isHex($msg)) {
             throw new NanoToolException("Invalid message: $msg");
         }
         if (!self::isHex($private_key, 64)) {
-            throw new NanoToolException("Invalid private key: $private_key");
+            throw new NanoToolException("Invalid private key (expected 64 hexadecimal characters)");
         }
 
         return strtoupper(bin2hex(

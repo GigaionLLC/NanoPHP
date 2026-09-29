@@ -352,6 +352,60 @@ checkThrows('NanoCLI rejects an option name with a dash', fn() => $cli->version(
 
 
 // *
+// *  Secrets never appear in exception messages, traces or object dumps
+// *  (throwaway values; a trailing newline is the classic trigger)
+// *
+
+// Returns [message, trace] of the exception $fn throws ('' if none)
+function thrownText(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (\Throwable $e) {
+        return $e->getMessage() . "\n" . $e->getTraceAsString();
+    }
+    return '';
+}
+
+$secret_seed  = strtoupper(bin2hex(random_bytes(32)));
+$secret_key   = strtoupper(bin2hex(random_bytes(32)));
+$secret_mseed = strtoupper(bin2hex(random_bytes(64)));
+$secret_hex   = strtoupper(bin2hex(random_bytes(16)));
+$secret_words = NanoTool::hex2mnem($secret_hex);
+
+$leaks = [
+    'seed2keys'      => [fn() => NanoTool::seed2keys($secret_seed . "\n"), $secret_seed],
+    'private2public' => [fn() => NanoTool::private2public($secret_key . ' '), $secret_key],
+    'public2account' => [fn() => NanoTool::public2account($secret_key . ' '), $secret_key],
+    'sign'           => [fn() => NanoTool::sign('AB', $secret_key . "\n"), $secret_key],
+    'mseed2keys'     => [fn() => NanoTool::mseed2keys($secret_mseed . "\n"), $secret_mseed],
+    'hex2mnem'       => [fn() => NanoTool::hex2mnem($secret_hex . 'Z'), $secret_hex],
+    'NanoBlock'      => [fn() => new NanoBlock($secret_key . "\n"), $secret_key],
+    'NanoWallet'     => [fn() => \GigaionLLC\NanoPHP\NanoWallet::fromPrivateKey(new \GigaionLLC\NanoPHP\NanoRPC(), $secret_key . "\n"), $secret_key],
+];
+foreach ($leaks as $name => [$fn, $secret]) {
+    $text = thrownText($fn);
+    // Traces print the first 15 characters of string arguments by default
+    check("$name error omits the secret", $text !== '' && stripos($text, substr($secret, 0, 12)) === false);
+}
+
+$typo_words = $secret_words;
+$typo_words[5] = 'notabip39word' . $secret_words[5];
+$text = thrownText(fn() => NanoTool::mnem2hex($typo_words));
+check('mnem2hex error names the position, not the word', strpos($text, 'position 6') !== false && strpos($text, $typo_words[5]) === false);
+$text = thrownText(fn() => NanoTool::mnem2mseed($typo_words));
+check('mnem2mseed error names the position, not the word', strpos($text, 'position 6') !== false && strpos($text, $typo_words[5]) === false);
+
+$dump_block  = new NanoBlock($secret_key);
+$dump_wallet = \GigaionLLC\NanoPHP\NanoWallet::fromPrivateKey(new \GigaionLLC\NanoPHP\NanoRPC(), $secret_key);
+ob_start();
+var_dump($dump_block, $dump_wallet);
+$dumps = ob_get_clean() . print_r($dump_block, true) . print_r($dump_wallet, true);
+check('var_dump/print_r of NanoBlock and NanoWallet omit the private key', stripos($dumps, $secret_key) === false);
+check('NanoWallet dump still shows the account', strpos($dumps, $dump_wallet->address()) !== false);
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

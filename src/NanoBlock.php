@@ -35,10 +35,10 @@ class NanoBlock
     // *  Initialization
     // *
     
-    public function __construct(string $private_key)
+    public function __construct(#[\SensitiveParameter] string $private_key)
     {
-        if (strlen($private_key) != 64 || !hex2bin($private_key)) {
-            throw new NanoBlockException("Invalid private key: $private_key");
+        if (strlen($private_key) != 64 || !ctype_xdigit($private_key)) {
+            throw new NanoBlockException("Invalid private key (expected 64 hexadecimal characters)");
         }
         
         $this->privateKey = $private_key;
@@ -47,6 +47,18 @@ class NanoBlock
     }
     
     
+    /** var_dump()/print_r() view without the private key */
+    public function __debugInfo(): array
+    {
+        return [
+            'account'   => $this->account,
+            'publicKey' => $this->publicKey,
+            'block'     => $this->block,
+            'blockId'   => $this->blockId
+        ];
+    }
+
+
     // *
     // *  Set previous block
     // *
