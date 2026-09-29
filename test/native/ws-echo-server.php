@@ -5,6 +5,11 @@
 // reconnects are fine). Sends an unsolicited ping after the handshake,
 // then echoes every text message back. Test-only; not for production.
 //
+// Hostile-peer modes for the DoS guards:
+//  - handshake to path /huge-headers: endless 101 response headers
+//  - text message "__stall__": a frame header announcing 100 bytes, then
+//    10 bytes, then silence
+//
 //   php test/native/ws-echo-server.php 17078
 
 class ClientGone extends Exception{}
@@ -64,6 +69,16 @@ function serveClient($client): void
 
     $accept = base64_encode(sha1($match[1] . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', true));
 
+    if (preg_match('#^GET /huge-headers #', $request)) {
+        fwrite($client, "HTTP/1.1 101 Switching Protocols\r\n");
+        for ($i = 0; $i < 4096; $i++) {
+            if (@fwrite($client, "X-Pad-$i: " . str_repeat('p', 64) . "\r\n") === false) {
+                break;
+            }
+        }
+        throw new ClientGone('huge headers sent');
+    }
+
     fwrite($client,
         "HTTP/1.1 101 Switching Protocols\r\n" .
         "Upgrade: websocket\r\n" .
@@ -106,6 +121,16 @@ function serveClient($client): void
             case 0x2:
             case 0x0:
                 $message .= $payload;
+                if ($fin && $message === '__stall__') {
+                    // Announce 100 bytes, deliver 10, then go quiet until
+                    // the client gives up and disconnects
+                    fwrite($client, chr(0x81) . chr(100) . str_repeat('s', 10));
+                    stream_set_timeout($client, 20);
+                    while (($chunk = fread($client, 1024)) !== false && $chunk !== '') {
+                        // swallow whatever the client still sends (pongs)
+                    }
+                    throw new ClientGone('stalled');
+                }
                 if ($fin) {
                     sendFrame($client, 0x1, $message);
                     $message = '';

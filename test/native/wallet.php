@@ -377,6 +377,18 @@ check('wallet_sweep: sent total', $result['sent'] ?? null, '5');
 
 
 // *
+// *  NanoRPC response size cap
+// *
+
+$rpc_capped = new NanoRPC('http', '127.0.0.1', $port, null, ['max_response_size' => 16]);
+check('response above max_response_size rejected', $rpc_capped->block_count(), false);
+check('response cap error message', $rpc_capped->error, 'Response exceeds max_response_size (16 bytes)');
+$rpc_uncapped = new NanoRPC('http', '127.0.0.1', $port, null, ['max_response_size' => null]);
+check('max_response_size null disables the cap', $rpc_uncapped->block_count()['count'] ?? null, '42');
+check('default cap accepts normal responses', $rpc->block_count()['count'] ?? null, '42');
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {

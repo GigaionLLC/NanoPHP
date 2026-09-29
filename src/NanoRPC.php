@@ -75,7 +75,11 @@ class NanoRPC
             'headers'         => [],
             'follow_location' => false,
             'max_redirects'   => 10,
-            'user_agent'      => 'NanoPHP/NanoRPC'
+            'user_agent'      => 'NanoPHP/NanoRPC',
+            // Largest response body accepted, in bytes (null = unlimited).
+            // Generous for any real RPC answer, but a malicious node can't
+            // exhaust memory with an endless body.
+            'max_response_size' => 64 * 1024 * 1024
         ];
 
         if (is_array($options)) {
@@ -292,6 +296,14 @@ class NanoRPC
                 return false;
             }
 
+            $max_size = $this->options['max_response_size'];
+            if ($max_size !== null && strlen($this->responseRaw) > (int) $max_size) {
+                $this->responseRaw = false;
+                $this->error       = "Response exceeds max_response_size ($max_size bytes)";
+
+                return false;
+            }
+
             if (!$this->options['follow_location'] ||
                 !in_array($this->status, [301, 302, 303, 307, 308], true) ||
                 $location === null || $location === ''
@@ -364,7 +376,12 @@ class NanoRPC
 
         $context = stream_context_create(['http' => $http]);
 
-        $this->responseRaw = @file_get_contents($endpoint, false, $context);
+        // Read at most one byte past the cap, so an oversized body is
+        // detected without being buffered in full
+        $max_size = $this->options['max_response_size'];
+        $max_read = $max_size === null ? null : (int) $max_size + 1;
+
+        $this->responseRaw = @file_get_contents($endpoint, false, $context, 0, $max_read);
 
         if (function_exists('http_get_last_response_headers')) {
             return http_get_last_response_headers() ?? [];

@@ -129,6 +129,100 @@ stopEchoServer($server);
 
 
 // *
+// *  DoS guards: a hostile server can neither flood the handshake with
+// *  headers nor stall the client forever in the middle of a frame
+// *
+
+$port++;
+$server = spawnEchoServer($port);
+
+$flooded = null;
+try {
+    new WebSocketClient("ws://127.0.0.1:$port/huge-headers", ['timeout' => 5]);
+} catch (\GigaionLLC\NanoPHP\Util\WebSocketClientException $e) {
+    $flooded = $e->getMessage();
+}
+check('oversized handshake headers rejected', $flooded, 'WebSocket handshake response headers too large');
+
+$staller = new WebSocketClient("ws://127.0.0.1:$port/", ['timeout' => 1, 'frame_timeout' => 2]);
+$staller->send('__stall__');
+$started = microtime(true);
+$stalled = null;
+try {
+    // The first read may be the server's ping; keep reading until the
+    // stalled frame makes receive() throw
+    for ($i = 0; $i < 5; $i++) {
+        $staller->receive();
+    }
+} catch (\GigaionLLC\NanoPHP\Util\WebSocketClientException $e) {
+    $stalled = $e->getMessage();
+}
+$elapsed = microtime(true) - $started;
+check('stalled frame ends with an error', $stalled, 'Timed out waiting for the rest of a WebSocket frame');
+check('stalled frame gives up within frame_timeout', $elapsed < 5.0);
+check('connection closed after a stalled frame', $staller->isConnected(), false);
+stopEchoServer($server);
+
+
+// *
+// *  NanoIPC framing: bounded, looped reads (in-process TCP peer; the
+// *  responses are queued before the request is sent)
+// *
+
+function ipcPeer(): array
+{
+    $listener = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+    $address  = stream_socket_get_name($listener, false);
+    $ipc_port = (int) substr($address, strrpos($address, ':') + 1);
+
+    return [$listener, $ipc_port];
+}
+
+[$listener, $ipc_port] = ipcPeer();
+$ipc = new \GigaionLLC\NanoPHP\NanoIPC('tcp', ['127.0.0.1', $ipc_port], ['timeout' => 5]);
+check('NanoIPC open()', $ipc->open());
+$peer = stream_socket_accept($listener, 5);
+$ipc_body = json_encode(['count' => '42', 'unchecked' => '0']);
+fwrite($peer, pack('N', strlen($ipc_body)) . $ipc_body);
+check('NanoIPC reads a framed response', $ipc->block_count(), ['count' => '42', 'unchecked' => '0']);
+fclose($peer);
+$ipc->close();
+fclose($listener);
+
+// A peer announcing a ~4 GiB frame must not make the client allocate it
+[$listener, $ipc_port] = ipcPeer();
+$ipc = new \GigaionLLC\NanoPHP\NanoIPC('tcp', ['127.0.0.1', $ipc_port], ['timeout' => 5]);
+$ipc->open();
+$peer = stream_socket_accept($listener, 5);
+fwrite($peer, pack('N', 0xFFFFFFF0) . 'xx');
+check('NanoIPC rejects an oversized frame length', $ipc->block_count(), false);
+check('NanoIPC oversized frame error', strpos((string) $ipc->error, 'exceeds max_response_size') !== false);
+fclose($peer);
+fclose($listener);
+
+// A frame above a configured cap is rejected too
+[$listener, $ipc_port] = ipcPeer();
+$ipc = new \GigaionLLC\NanoPHP\NanoIPC('tcp', ['127.0.0.1', $ipc_port], ['timeout' => 5, 'max_response_size' => 16]);
+$ipc->open();
+$peer = stream_socket_accept($listener, 5);
+fwrite($peer, pack('N', strlen($ipc_body)) . $ipc_body);
+check('NanoIPC honours max_response_size', $ipc->block_count(), false);
+fclose($peer);
+fclose($listener);
+
+// A truncated frame is an error, not a silently short response
+[$listener, $ipc_port] = ipcPeer();
+$ipc = new \GigaionLLC\NanoPHP\NanoIPC('tcp', ['127.0.0.1', $ipc_port], ['timeout' => 2]);
+$ipc->open();
+$peer = stream_socket_accept($listener, 5);
+fwrite($peer, pack('N', 100) . substr($ipc_body, 0, 10));
+stream_socket_shutdown($peer, STREAM_SHUT_WR); // EOF after 10 of 100 bytes
+check('NanoIPC truncated frame is an error', [$ipc->block_count(), $ipc->error], [false, 'Unable to receive response']);
+fclose($peer);
+fclose($listener);
+
+
+// *
 // *  NanoWS wrapper (Nano node subscription protocol shape)
 // *
 
