@@ -42,6 +42,14 @@ Same guarantees as atto:
   operator cannot manipulate the wallet by, for example, reporting wrong
   balances.
 
+Beyond atto:
+
+- **Signing is not constant-time.** The pure-PHP (bcmath) Ed25519 uses a
+  fixed-length ladder for secret scalars, but bcmath arithmetic still takes
+  value-dependent time. Do not run it where untrusted parties can trigger and
+  precisely time many signatures (for example co-tenant hosts or high-rate
+  signing APIs); see [docs/CRYPTO.md](docs/CRYPTO.md#security-notes).
+
 ---
 
 ## Requirements

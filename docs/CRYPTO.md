@@ -59,21 +59,41 @@ Ed25519 with BLAKE2b-512 substituted, on bcmath big integers.
   scalar `a = clamp(h[0..31])`; public key `A = a·B`. Signing uses
   `r = BLAKE2b-512(h[32..63] ‖ M) mod L`, `S = r + BLAKE2b-512(R‖A‖M)·a mod L`.
 - Verification decodes A and R (rejecting out-of-range y and non-canonical
-  `S ≥ L`) and checks `S·B = R + k·A` by comparing encodings.
+  `S ≥ L`), rejects A or R of small order (`8·P` = identity: the 8 torsion
+  points, with which `S = 0` would "sign" any message), and checks
+  `S·B = R + k·A` by comparing encodings.
 
 Performance on this machine: ~8 ms public-key derivation, ~12 ms sign,
 ~15 ms verify — three orders of magnitude faster than needed for wallet use.
+(The fixed-length ladder for secret scalars, see below, made key derivation
+~15 % and signing ~30 % slower in 1.1.1; verification is unchanged.)
 
 ### Security notes
 
-- **Not constant-time.** bcmath operation timing depends on operand values, so
-  scalar bits leak through timing in principle. This matches the pure-PHP Salt
-  library the upstream used and is acceptable for server-side wallets; do not
-  use it where an attacker can take fine-grained timing measurements of
-  signing with secrets they want to extract.
-- Signing is deterministic (RFC 8032 style) — no RNG is consumed at sign time,
-  so a bad RNG cannot leak the key through repeated nonces. Randomness is only
-  used for `NanoTool::keys()` / `NanoWallet::newSeed()`, via `random_bytes()`.
+- **Not constant-time.** Secret scalars (the private scalar `a` and the
+  nonce `r`) go through a fixed-length ladder: always 256 double-and-add
+  steps with the addition computed every time and the result selected, and
+  the starting identity gets a random projective `Z`. This removes the
+  loop-length and branch leak of plain double-and-add (before: ~30 µs per
+  nonce bit and a Hamming-weight dependency; measured after: within run-to-run
+  noise for 8-, 128- and 252-bit scalars) without changing any output. bcmath
+  arithmetic itself still takes value-dependent time, so timing can still leak
+  in principle.
+  - Fine: the CLI wallet and scripts that sign occasionally for their own
+    keys.
+  - **Not fine: server-side signing services** or anywhere untrusted parties
+    can trigger and precisely time many signatures (co-located tenants on the
+    same host/VM, high-rate signing APIs). Those are exactly the setups where
+    Minerva/TPM-Fail-style lattice attacks on partial nonce leakage become
+    plausible. Use a constant-time implementation (e.g. a native Nano
+    signer) there.
+  - Verification only processes public values and uses the faster
+    variable-length loop.
+- Signing is deterministic (RFC 8032 style): the nonce never depends on the
+  RNG, so a bad RNG cannot leak the key through repeated nonces. The only
+  randomness at sign time is the projective blinding above, which does not
+  affect the result. Keys and seeds come from `random_bytes()`
+  (`NanoTool::keys()` / `NanoWallet::newSeed()`).
 - `hash_equals` is used for the signature-encoding and checksum comparisons.
 
 ## How it is all verified — `php test/native/verify.php`

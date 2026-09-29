@@ -467,6 +467,32 @@ check('genuine signature still verifies after small-order checks',
 
 
 // *
+// *  Fixed-length signing ladder: output must stay byte-identical.
+// *  32 deterministic keys/messages (lengths 0..62 bytes); the digest was
+// *  produced by the previous variable-length implementation.
+// *
+
+$ladder_outputs = '';
+$ladder_verified = true;
+for ($i = 0; $i < 32; $i++) {
+    $ladder_key = Blake2b::hash("nanophp-ladder-key-$i", 32);
+    $ladder_msg = substr(Blake2b::hash("nanophp-ladder-msg-$i", 64), 0, $i * 2);
+    $ladder_pub = Ed25519Blake2b::publicKey($ladder_key);
+    $ladder_sig = Ed25519Blake2b::sign($ladder_msg, $ladder_key);
+    $ladder_verified = $ladder_verified && Ed25519Blake2b::verify($ladder_msg, $ladder_sig, $ladder_pub);
+    $ladder_outputs .= $ladder_pub . $ladder_sig;
+    if ($i === 0) {
+        check('ladder vector 0 public key', bin2hex($ladder_pub), '1303101bc612286f430d50df6e81b9f701b48a7a291cbb5c4d69aa9994ac7b90');
+        check('ladder vector 0 signature (empty message)', bin2hex($ladder_sig),
+            '9fa4453ac7fa60d7e0eaca091014a708bcda49ad2af291a64eb32d25456d116367f3e04239715895abd3c326d423a0ac93355c584ee9eeeedd1f53933815320d');
+    }
+}
+check('32 deterministic keys/signatures identical to the previous implementation',
+    hash('sha256', $ladder_outputs), '0d3bea5b8f71613a2d43e5eab5cbe640490394aed37496a30ba3dcb1cd9936b0');
+check('32 deterministic signatures verify', $ladder_verified);
+
+
+// *
 
 echo "\n";
 if ($failures > 0) {
