@@ -115,12 +115,18 @@ use GigaionLLC\NanoPHP\NanoTool;
 ## Behind nginx (PHP-FPM)
 
 A complete web-facing example — nginx serving a PHP app that uses NanoPHP.
-Three files:
+Three files. Any PHP that serves web requests must be **8.5.12 or newer**
+(8.4.27 / 8.3.36 / 8.2.35 on older branches): earlier releases have two
+critical unauthenticated RCEs, CVE-2026-109618 and CVE-2026-109619 (PHP
+security advisory, 2026-10-21). Rebuild with `--pull` to get the patched base.
 
 ```dockerfile
 # Dockerfile.app
 FROM php:8.5-fpm-alpine
 RUN docker-php-ext-install bcmath
+# hardening from the PHP 2026-10-21 security advisory (the real fix is PHP >= 8.5.12)
+RUN printf 'session.upload_progress.enabled = Off\nfatal_error_backtraces = 0\n' \
+      > /usr/local/etc/php/conf.d/zz-hardening.ini
 COPY --from=ghcr.io/gigaionllc/nanophp:latest /app /opt/nanophp
 COPY public/ /var/www/html/
 ```
