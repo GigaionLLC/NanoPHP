@@ -58,6 +58,12 @@ frontier, an epoch link without the pinned epoch signer's signature, or a
 frontier of another account is rejected (C1, M1, M2; a malicious node could
 otherwise make the wallet sign blocks that move funds).
 
+**1.1.2** — PHP runtime security release, no library code change: the Docker
+image is rebuilt on PHP 8.5.12, which fixes CVE-2026-109618 and CVE-2026-109619
+(unauthenticated remote code execution in PHP itself, PHP security advisory of
+2026-10-21). The PHP-FPM example in [DOCKER.md](DOCKER.md) now requires PHP
+8.5.12+ and shows the advisory's hardening settings.
+
 **1.1.1** — hardening; outputs for valid input (keys, addresses, hashes,
 signatures, blocks, CLI output) are byte-identical:
 
